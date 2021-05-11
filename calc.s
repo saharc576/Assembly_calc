@@ -52,7 +52,7 @@ section .bss
     stack_size:     resb   4     ; default is STACK_DEF_SIZE
     stack_ptr:      resb   4     ; pointer to begining of stack
     stack_curr_pos: resb   4     ; pointer to current available position in stack
-    var:            resb   4     ; aux variable
+    var:            resb   32    ; aux variable
 section .text
   align 16
   global main
@@ -89,11 +89,12 @@ main:
         je .fin_args_loop
         ; compare current argument with debug flag
         cmp_and_set_str dword [ebx + 4*edx], "-d", 2, [debug]
-        cmp [debug], 1
 
+        ; if cmp and set didn't set, we'll get here 
         pushad
         push [ebx + 4*edx]        ; argument for func, curr argument
         call str_to_decimal
+        mov [stack_size], eax
         add esp, 4                ; remove the argument to str_to_octal from stack
         popad
         jmp args_loop
@@ -149,6 +150,7 @@ main:
             ;  mov ebx, dword [eax + 4 ] => argv[1]
 
         build_list:
+        ;; check room in stack
             .loop:
                 ; take the last byte from buffer
                 ; mov dl, [buffer]
@@ -202,11 +204,13 @@ str_to_decimal:
         sub cl, '0'                 ; convert to decimal
         sub bl, '0'                 ; convert to decimal
 
+        ; convert from octal to decimal and store in eax
         mov [var], byte bl
-        mov 
-        mov [var], byte cl          ; first letter is multiplied by 1
-        shl ebx, 3                  ; multiply by 8
-        add [var], dword ebx 
+        mov ebx, [var]
+        shl ebx, 3                  ; multiply second letter by 8
+        mov [var], cl               ; move first letter
+        add [var], dword ebx        ; add both
+        mov eax, [var]              ; store return value
 
     .no_number:
         mov eax, STACK_DEF_SIZE    
