@@ -41,18 +41,21 @@ section .data
         num:  resb  1
         next: resd  1
     endstruc
-    len: equ $ - size_i     ; Size of the data type
+    node_len: equ $ - size_i     ; Size of the data type
 
 
 section .bss
-    spt:            resd   1     ; stack pointer
-    buffer:         resb   MAX_INPUT_SIZE
-    counter:        resb   4     ; the total numebr of operations that were made
-    debug:          resb   1
-    stack_size:     resb   4     ; default is STACK_DEF_SIZE
-    stack_ptr:      resb   4     ; pointer to begining of stack
-    stack_curr_pos: resb   4     ; pointer to current available position in stack
-    var:            resb   32    ; aux variable
+    spt:                resd   1     ; stack pointer
+    buffer:             resb   MAX_INPUT_SIZE
+    buffer_len:         resb   7     ; 2^7 > MAX_INPUT_SIZE
+    counter:            resb   32    ; the total numebr of operations that were made
+    debug:              resb   1
+    stack_size:         resb   4     ; default is STACK_DEF_SIZE
+    stack_ptr:          resb   4     ; pointer to begining of stack
+    stack_curr_pos_ptr: resb   4 ; pointer to current available position in stack
+    stack_curr_pos:     resb
+    var:            resb   32    ; aux variable 
+
 section .text
   align 16
   global main
@@ -102,7 +105,7 @@ main:
         push [stack_size]
         call malloc                         ; stack allocation
         mov [stack_ptr], dword eax          
-        mov [stack_curr_pos], dword eax     ; curr available position in stack
+        mov [stack_curr_pos_ptr], dword eax     ; curr available position in stack
 
     ;V; allocate memory for stack
     ;; init primary pointers for each cell in stack - using macro prim_ptr
@@ -126,9 +129,9 @@ main:
             push dword MAX_INPUT_SIZE       ; max lenght
             push dword buffer               ; input buffer
             call fgets
-            add esp, 12                     ; remove 3 push from stuck
+            add esp, 12                     ; remove the 3 pushes from stuck
 
-            mov bl, byte [buffer]           ; get first char of 
+            mov bl, byte [buffer]           ; get first char of buffer
             cmp bl, '0'             
             jge maybe_number 
             jmp operator                    ; it must be an operator
@@ -137,7 +140,7 @@ main:
                 cmp bl, '7' 
                 jg operator                 ; it is not a number
                 ; it is defitily a number
-
+                jmp build_list  
 
 
             ;V; print  prompt calc
@@ -149,24 +152,107 @@ main:
             ;   argv mov eax , dword [ebp +12]
             ;  mov ebx, dword [eax + 4 ] => argv[1]
 
-        build_list:
-        ;; check room in stack
-            .loop:
+        build_list:    
+        ; check room in stack
+        mov ecx, stack_ptr        
+        add ecx, stack_size             ; ecx points to the end of the stack array
+        sub ecx, stack_curr_pos_ptr     
+        cmp ecx, 0                      ; check if stack_curr_pos_ptr is end of stack
+        jg loop
+        pushad
+        push error_stack_overflow
+        call print_err
+        add esp, 4                      ; remove the argument to print_err from stack
+        popad
+
+        ; get buffer length
+        pushad
+        push buffer
+        call get_buff_size
+        add esp, 4                      ; remove the argument to print_err from stack
+        mov [buffer_len], eax
+        popad
+
+        add buffer, [buffer_len]        ; point to the end
+        mov [var], 1                    ; flag for first node creation
+        jmp main_loop
+
+            ; ebx will contain curr node pointer
+            ; ecx will contain the next node data - only cl because it's 8 bits 
+            .loop:  
+                cmp [buffer_len], 0
+                je end_build_list
+                mov bl, byte [buffer]           ; get first char of buffer
+                push bl
+                call str_to_decimal
+                add esp, 4                      ; remove the argument to print_err from stack
+                mov ecx, eax
+            
+                dec [buffer_len]
+
+                cmp [buffer_len], 0
+                je build_node
+
+                mov bl, byte [buffer]           ; get next char of buffer
+                push bl
+                call str_to_decimal
+                add esp, 4  
+                add ecx, eax
+                
+                dec [buffer_len]
+                jmp build_node
+
                 ; take the last byte from buffer
                 ; mov dl, [buffer]
                 ; call build node
 
             .build_node:
+                ; allocate memory for first node
+                push node_len
+                call malloc
+                add esp, 4                      ; remove the argument from stack
+                mov [eax + num], cl            ; set data
+                mov [eax + next], 0             ; set next to null
+                cmp [var], 1
+                jne not_first
+
+                .first:
+                    mov [var], 0                ; lower flag - not first anymore
+                    mov [stack_curr_pos_ptr], eax  
+                    mov ebx, eax                ; ebx contains curr node pointer
+                    jmp loop
+                .not_first:
+                    mov [ebx + next], eax       ; point to next node
+                    mov ebx, eax
+                    jmp loop
+
+
             ;   build using append from example 5
             ;  https://codehost.wordpress.com/2011/07/29/59/
 
+        .end_build_list:
+            inc stack_curr_pos
+            jmp main_loop
         
 
         operator:
-            ;; increase counter
-            ;; call the appropriate function for this operator
+            add byte [counter], 1         ; increase counter
+            mov bl, [buffer]
+            ; call the appropriate function for this operator
+            cmp bl, '+'
+            jmp .add                      ;; jump to add
+            cmp bl, 'p'
+            jmp .pop_n_print              ;; jump to pop and print
+            cmp bl, 'd'
+            jmp .duplicate                ;; jump to duplicate
+            cmp bl, '&'
+            jmp .and                      ;; jump to and
+            cmp bl, 'n'
+            cmp .num_bytes                ;; jump to number of bytes
+            cmp bl, '*'
+            jmp .mul                      ;; jump to multiply
 
-
+            ;;TODO
             .add:           ;+
 
             .pop_n_print:   ;p
@@ -222,3 +308,36 @@ str_to_decimal:
     .end:
         pop ebp
         ret
+
+;;TODO
+print_err:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+    mov ebx, [ebp + 8]  ; get argument which is a string
+
+free_list:
+
+free_stack:
+
+get_buff_size:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+    mov ebx, [ebp + 8]  ; get argument which is a string
+    
+    xor eax, eax
+    .loop:
+        ; check if it is max input size OR null char
+        cmp eax, MAX_INPUT_SIZE
+        je .end
+        cmp [ebx], 0
+        je end
+        inc ebx
+        inc eax
+        jmp .loop
+
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
+
+
