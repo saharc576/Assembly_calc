@@ -47,7 +47,7 @@ section .data
 section .bss
     spt:            resd   1     ; stack pointer
     buffer:         resb   MAX_INPUT_SIZE
-    counter:        resb   4     ; the total numebr of operations that were made
+    counter:        resb   32     ; the total numebr of operations that were made
     debug:          resb   1
     stack_size:     resb   4     ; default is STACK_DEF_SIZE
     stack_ptr:      resb   4     ; pointer to begining of stack
@@ -161,12 +161,24 @@ main:
         
 
         operator:
-            ;; increase counter
-            ;; call the appropriate function for this operator
-
+            add byte [counter], 1         ;; increase counter
+            mov bl, [buffer]
+                                          ;; call the appropriate function for this operator
+            cmp bl, '+'
+            jmp .add                      ;; jump to add
+            cmp bl, 'p'
+            jmp .pop_n_print              ;; jump to pop and print
+            cmp bl, 'd'
+            jmp .duplicate                ;; jump to duplicate
+            cmp bl, '&'
+            jmp .and                      ;; jump to and
+            cmp bl, 'n'
+            cmp .num_bytes                ;; jump to number of bytes
+            cmp bl, '*'
+            jmp .mul                      ;; jump to multiply
 
             .add:           ;+
-
+            
             .pop_n_print:   ;p
 
             .duplicate:     ;d
