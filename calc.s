@@ -11,9 +11,9 @@
     mov edi, %2         ; destination string
     mov ecx, %3         ; number of bytes to compare
     rep cmpsb
-    jne not_equal
+    jne %%not_equal
     %%equal:
-        mov %4, 1
+        mov %4, byte 1
         jmp args_loop   ; jmp to beginig of the loop in case it was "-d"
     %%not_equal:
 %endmacro
@@ -45,17 +45,16 @@ section .data
 
 
 section .bss
-    spt:                resd   1     ; stack pointer
-    buffer:             resb   MAX_INPUT_SIZE
-    buffer_len:         resb   7     ; 2^7 > MAX_INPUT_SIZE
-    counter:            resb   32    ; the total numebr of operations that were made
-    debug:              resb   1
-    stack_size:         resb   4     ; default is STACK_DEF_SIZE
-    stack_ptr:          resb   4     ; pointer to begining of stack
-    stack_curr_pos_ptr: resb   4 ; pointer to current available position in stack
-    stack_curr_pos:     resb
-    var:            resb   32    ; aux variable 
-
+    spt                 resd   1     ; stack pointer
+    buffer              resb   MAX_INPUT_SIZE
+    buffer_len          resb   MAX_INPUT_SIZE
+    counter             resb   32    ; the total numebr of operations that were made
+    debug               resb   1
+    stack_size          resb   8     ; default is STACK_DEF_SIZE
+    stack_ptr           resb   4     ; pointer to begining of stack
+    stack_curr_pos      resb   4     ; index of current available position in stack
+    stack_curr_pos_ptr  resb   4     ; pointer to current available position in stack
+    var                 resb   4     ; aux variable
 section .text
   align 16
   global main
@@ -72,21 +71,18 @@ section .text
   extern stderr
 main:
     push ebp
-    move ebp, esp
+    mov ebp, esp
 
     init:     
     mov [counter]   , byte 0
     mov [debug]     , byte 0
     mov [stack_size], dword STACK_DEF_SIZE
-    ;V; find if there is an argument for stack size - if not it is 5 
-    ;V; find if there is a debug mode flag; debug should support AT LEAST prinitnig everey number from user and every result pushed to stack - to stder 
-    ;V; inital counter for number of operations
 
     mov eax, [ebp + 8]          ; initialize counter = argc
     mov ebx, dword [ebp + 12]   ; **argv
     mov edx, 0
     mov ecx, 0                  ; flag
-    .args_loop:
+    args_loop:
         inc edx
         cmp edx, eax
         je .fin_args_loop
@@ -95,15 +91,18 @@ main:
 
         ; if cmp and set didn't set, we'll get here 
         pushad
-        push [ebx + 4*edx]        ; argument for func, curr argument
+        ; str_to_decimal gets two parameters - first is address of string and second is curr position
+        push ebx
+        shl edx, 2                ; multiply by 4 = size of ptr
+        push edx
         call str_to_decimal
         mov [stack_size], eax
-        add esp, 4                ; remove the argument to str_to_octal from stack
+        add esp, 4                              ; remove the argument to str_to_octal from stack
         popad
         jmp args_loop
     .fin_args_loop:
-        push [stack_size]
-        call malloc                         ; stack allocation
+        push dword [stack_size]
+        call malloc                             ; stack allocation
         mov [stack_ptr], dword eax          
         mov [stack_curr_pos_ptr], dword eax     ; curr available position in stack
 
@@ -121,7 +120,7 @@ main:
     myCalc:
         push ebp            ; backing up base pointer
         mov ebp, esp        ; set ebp to current activation frame
-        .main_loop:
+        main_loop:
             push prompt
             call printf
             ; call fgets with 3 parameters
@@ -133,7 +132,7 @@ main:
 
             mov bl, byte [buffer]           ; get first char of buffer
             cmp bl, '0'             
-            jge maybe_number 
+            jge .maybe_number 
             jmp operator                    ; it must be an operator
 
             .maybe_number:
@@ -153,108 +152,108 @@ main:
             ;  mov ebx, dword [eax + 4 ] => argv[1]
 
         build_list:    
-        ; check room in stack
-        mov ecx, stack_ptr        
-        add ecx, stack_size             ; ecx points to the end of the stack array
-        sub ecx, stack_curr_pos_ptr     
-        cmp ecx, 0                      ; check if stack_curr_pos_ptr is end of stack
-        jg loop
-        pushad
-        push error_stack_overflow
-        call print_err
-        add esp, 4                      ; remove the argument to print_err from stack
-        popad
+            ; check room in stack
+            mov ecx, stack_ptr        
+            add ecx, stack_size             ; ecx points to the end of the stack array
+            sub ecx, stack_curr_pos_ptr     
+            cmp ecx, 0                      ; check if stack_curr_pos_ptr is end of stack
+            jg .loop
+            pushad
+            push error_stack_overflow
+            call print_err
+            add esp, 4                      ; remove the argument to print_err from stack
+            popad
 
-        ; get buffer length
-        pushad
-        push buffer
-        call get_buff_size
-        add esp, 4                      ; remove the argument to print_err from stack
-        mov [buffer_len], eax
-        popad
+            ; get buffer length
+            pushad
+            push buffer
+            call get_buff_size
+            add esp, 4                      ; remove the argument to print_err from stack
+            mov [buffer_len], eax
+            popad
 
-        add buffer, [buffer_len]        ; point to the end
-        mov [var], 1                    ; flag for first node creation
-        jmp main_loop
+            ; make buffer point to end of the array
+            xor edi, edi
+            add edi, dword [buffer_len]
+            add [buffer], edi                 ; point to the end
+            mov [var], byte 1                 ; flag for first node creation
+            jmp main_loop
 
-            ; ebx will contain curr node pointer
-            ; ecx will contain the next node data - only cl because it's 8 bits 
-            .loop:  
-                cmp [buffer_len], 0
-                je end_build_list
-                mov bl, byte [buffer]           ; get first char of buffer
-                push bl
-                call str_to_decimal
-                add esp, 4                      ; remove the argument to print_err from stack
-                mov ecx, eax
-            
-                dec [buffer_len]
-
-                cmp [buffer_len], 0
-                je build_node
-
-                mov bl, byte [buffer]           ; get next char of buffer
-                push bl
-                call str_to_decimal
-                add esp, 4  
-                add ecx, eax
+                ; ebx will contain curr node pointer
+                ; ecx will contain the next node data - only cl because it's 8 bits 
+                .loop:  
+                    cmp [buffer_len], byte 0
+                    je .end_build_list
+                    mov cl, byte [buffer]           ; get last char of buffer
+                    
+                    ; change to decimal
+                    sub cl, byte '0'
                 
-                dec [buffer_len]
-                jmp build_node
+                    dec byte [buffer_len]
+                    dec byte [buffer]
 
-                ; take the last byte from buffer
-                ; mov dl, [buffer]
-                ; call build node
+                    cmp byte [buffer_len], 0
+                    je .build_node
 
-            .build_node:
-                ; allocate memory for first node
-                push node_len
-                call malloc
-                add esp, 4                      ; remove the argument from stack
-                mov [eax + num], cl            ; set data
-                mov [eax + next], 0             ; set next to null
-                cmp [var], 1
-                jne not_first
+                    mov bl, byte [buffer]           ; get next char of buffer
+                    add cl, bl
+                    
+                    dec byte [buffer_len]
+                    dec byte [buffer]
+                    jmp .build_node
 
-                .first:
-                    mov [var], 0                ; lower flag - not first anymore
-                    mov [stack_curr_pos_ptr], eax  
-                    mov ebx, eax                ; ebx contains curr node pointer
-                    jmp loop
-                .not_first:
-                    mov [ebx + next], eax       ; point to next node
-                    mov ebx, eax
-                    jmp loop
+                    ; take the last byte from buffer
+                    ; mov dl, [buffer]
+                    ; call build node
+
+                .build_node:
+                    ; allocate memory for first node
+                    push node_len
+                    call malloc
+                    add esp, 4                            ; remove the argument from stack
+                    mov byte [eax + num], cl              ; set data
+                    mov byte [eax + next], 0              ; set next to null
+                    cmp byte [var], 1
+                    jne .not_first
+
+                    .first:
+                        mov byte [var], 0           ; lower flag - not first anymore
+                        mov [stack_curr_pos_ptr], eax  
+                        mov ebx, eax                ; ebx contains curr node pointer
+                        jmp .loop
+                    .not_first:
+                        mov [ebx + next], eax       ; point to next node
+                        mov ebx, eax
+                        jmp .loop
 
 
-            ;   build using append from example 5
-            ;  https://codehost.wordpress.com/2011/07/29/59/
+                ;   build using append from example 5
+                ;  https://codehost.wordpress.com/2011/07/29/59/
 
         .end_build_list:
-            inc stack_curr_pos
+            inc byte [stack_curr_pos]
             jmp main_loop
         
 
         operator:
-            add byte [counter], 1         ; increase counter
-            mov bl, [buffer]
-            ; call the appropriate function for this operator
-            cmp bl, '+'
-            jmp .add                      ;; jump to add
-            cmp bl, 'p'
-            jmp .pop_n_print              ;; jump to pop and print
-            cmp bl, 'd'
-            jmp .duplicate                ;; jump to duplicate
-            cmp bl, '&'
+            add byte [counter], 1         ;; increase counter
+            mov bl, [buffer]              ; get curr char - it must be an operator
+                                          ;; call the appropriate function for this operator
+            cmp byte bl, '+'
+            je .add                      ;; jump to add
+            cmp byte bl, 'p'
+            je .pop_n_print              ;; jump to pop and print
+            cmp byte bl, 'd'
+            je .duplicate                ;; jump to duplicate
+            cmp byte bl, '&'
             jmp .and                      ;; jump to and
-            cmp bl, 'n'
-            cmp .num_bytes                ;; jump to number of bytes
-            cmp bl, '*'
-            jmp .mul                      ;; jump to multiply
+            cmp byte bl, 'n'
+            je .num_bytes                ;; jump to number of bytes
+            cmp byte bl, '*'
+            je .mul                      ;; jump to multiply
 
-            ;;TODO
             .add:           ;+
-
+            
             .pop_n_print:   ;p
 
             .duplicate:     ;d
@@ -273,18 +272,20 @@ main:
 str_to_decimal:
     push ebp            ; backing up base pointer
     mov ebp, esp        ; set ebp to current activation frame
-    mov ebx, [ebp + 8]  ; get argument which is a string
+    mov ebx, [ebp + 8]  ; get first argument - pointer to begining of string
+    mov edi, [ebp + 12] ; second argument is curr position
+    mov ebx, [ebx + edi]
 
     ; highest possible number is octal 77, meaning string length <= 2
     mov cl, byte [ebx]  ; get char
     cmp cl, 0           
-    je no_number        ; nothing was given
+    je .no_number        ; nothing was given
 
 
     add ebx, 1          ; move to next char
     mov bl, [ebx]       ; get next char
     cmp cl, 0           
-    je one_letter       ; one letter number
+    je .one_letter       ; one letter number
 
     .two_letter:
         sub cl, '0'                 ; convert to decimal
@@ -300,10 +301,10 @@ str_to_decimal:
 
     .no_number:
         mov eax, STACK_DEF_SIZE    
-        jmp end
+        jmp .end
     .one_letter:
-        mov eax, byte cl
-        jmp end
+        mov eax, ecx
+        jmp .end
 
     .end:
         pop ebp
@@ -329,8 +330,8 @@ get_buff_size:
         ; check if it is max input size OR null char
         cmp eax, MAX_INPUT_SIZE
         je .end
-        cmp [ebx], 0
-        je end
+        cmp byte [ebx], 0
+        je .end
         inc ebx
         inc eax
         jmp .loop
