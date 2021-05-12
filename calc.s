@@ -52,7 +52,6 @@ section .bss
     debug               resb   1
     stack_size          resb   8     ; default is STACK_DEF_SIZE
     stack_ptr           resb   4     ; pointer to begining of stack
-    stack_curr_pos      resb   4     ; index of current available position in stack
     stack_curr_pos_ptr  resb   4     ; pointer to current available position in stack
     var                 resb   4     ; aux variable
 section .text
@@ -92,9 +91,9 @@ main:
         ; if cmp and set didn't set, we'll get here 
         pushad
         ; str_to_decimal gets two parameters - first is address of string and second is curr position
-        push ebx
         shl edx, 2                ; multiply by 4 = size of ptr
         push edx
+        push ebx
         call str_to_decimal
         mov [stack_size], eax
         add esp, 4                              ; remove the argument to str_to_octal from stack
@@ -153,17 +152,21 @@ main:
 
         build_list:    
             ; check room in stack
-            mov ecx, stack_ptr        
-            add ecx, stack_size             ; ecx points to the end of the stack array
-            sub ecx, stack_curr_pos_ptr     
+            mov ecx, [stack_ptr]        
+            add ecx, [stack_size]           ; ecx points to the end of the stack array
+            sub ecx, [stack_curr_pos_ptr]   ; sub from ecx the location    
             cmp ecx, 0                      ; check if stack_curr_pos_ptr is end of stack
-            jg .loop
+            jg .start_loop
+            
             pushad
             push error_stack_overflow
             call print_err
             add esp, 4                      ; remove the argument to print_err from stack
             popad
+            jmp main_loop
 
+
+            .start_loop:
             ; get buffer length
             pushad
             push buffer
@@ -174,11 +177,10 @@ main:
 
             ; make buffer point to end of the array
             xor edi, edi
-            add edi, dword [buffer_len]
+            mov edi, dword [buffer_len]
             add [buffer], edi                 ; point to the end
             mov [var], byte 1                 ; flag for first node creation
-            jmp main_loop
-
+            
                 ; ebx will contain curr node pointer
                 ; ecx will contain the next node data - only cl because it's 8 bits 
                 .loop:  
@@ -196,7 +198,8 @@ main:
                     je .build_node
 
                     mov bl, byte [buffer]           ; get next char of buffer
-                    add cl, bl
+                    mul bl, 10          
+                    add cl, bl                      ; cl contains the two octal digits 
                     
                     dec byte [buffer_len]
                     dec byte [buffer]
@@ -231,7 +234,7 @@ main:
                 ;  https://codehost.wordpress.com/2011/07/29/59/
 
         .end_build_list:
-            inc byte [stack_curr_pos]
+            inc byte [stack_curr_pos_ptr]
             jmp main_loop
         
 
@@ -253,15 +256,47 @@ main:
             je .mul                      ;; jump to multiply
 
             .add:           ;+
+            ; pop two linked lists l1 l2 and save them in regs
+            ; pad the shorter linked list - add zero links by calling build node
+            ; loop simultaniousely on both l1 l2 and send curr link of both to add_link + carry of last add_link (first is 0)
+            ; if done, check if there is carry. if there is, create another node with data = carry. 
+            ;
+            ; after all, free memory, and push res
+
+            ; add_link:
+            ; sum three right bites of both linkes + carry of last add_link
+            ; if res <= 7 do nothing. 
+            ; else add 2 to res, then sub 10 and add 1 to carry.
+            ; then sum next 3 bits of both links with carry
+            ; do same as before with carry
+            ; build res node with current data
+            
+
             
             .pop_n_print:   ;p
+            
+
+                call pop
+                ;loop from the last link to the first and print with printf recursively
+                 ;base case - next is null
+                 ;if yes printf on data 
+                 ;else next link - aid function that gets a link 
+                
+                .loop:
+                    ; get curr
+                    cmp []
 
             .duplicate:     ;d
-
+                ;call pop and then loop over the list and each node call build node and then push to the list
             .and:           ;&
-            
+                ;    
             .num_bytes:     ;n 
                 ; pop the last number, push the number of bytes of it (in hexa rounded up) to stack
+                ;call pop
+                ;iterate over the list to get each links data size 
+                ;copy links data and then shift left in a loop until we stumble upon 1 and then 8-counter
+                ;summing up all the bytes we got and then division by 8 and then round up if there is a remainder (divide with remainder check)
+                ;push back to the stack
 
             .mul:           ;*
 
@@ -316,6 +351,19 @@ print_err:
     mov ebp, esp        ; set ebp to current activation frame
     mov ebx, [ebp + 8]  ; get argument which is a string
 
+    push ebx
+    push format_string
+    push [stderr]
+    call fprintf
+    add esp, 12         ; clean stack
+
+    mov esp, ebp
+    pop ebp
+    ret
+
+
+
+
 free_list:
 
 free_stack:
@@ -341,4 +389,17 @@ get_buff_size:
         pop ebp
         ret
 
+
+pop:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+
+    dec [stack_curr_pos_ptr]
+    mov eax, [stack_curr_pos_ptr]
+    mov byte [stack_curr_pos_ptr], 0
+
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
 
