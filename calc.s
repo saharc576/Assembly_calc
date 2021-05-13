@@ -38,7 +38,7 @@ section	.rodata			; we define (global) read-only variables in .rodata section
 section .data
     size_i:                 ; Used to determine the size of the structure
     struc node
-        num:  resb  1
+        data:  resb  1
         next: resd  1
     endstruc
     node_len: equ $ - size_i     ; Size of the data type
@@ -214,7 +214,7 @@ main:
                     push node_len
                     call malloc
                     add esp, 4                            ; remove the argument from stack
-                    mov byte [eax + num], cl              ; set data
+                    mov byte [eax + data], cl              ; set data
                     mov byte [eax + next], 0              ; set next to null
                     cmp byte [var], 1
                     jne .not_first
@@ -271,25 +271,27 @@ main:
             ; do same as before with carry
             ; build res node with current data
             
-
+            jmp main_loop
             
             .pop_n_print:   ;p
-            
-
-                call pop
-                ;loop from the last link to the first and print with printf recursively
-                 ;base case - next is null
-                 ;if yes printf on data 
-                 ;else next link - aid function that gets a link 
                 
-                .loop:
-                    ; get curr
-                    cmp []
+                call pop_list
+                push eax
+                call pop_print_rec
+
+                jmp main_loop
 
             .duplicate:     ;d
                 ;call pop and then loop over the list and each node call build node and then push to the list
+                
+                jmp main_loop
+            
+            
             .and:           ;&
                 ;    
+                jmp main_loop
+
+            
             .num_bytes:     ;n 
                 ; pop the last number, push the number of bytes of it (in hexa rounded up) to stack
                 ;call pop
@@ -297,8 +299,11 @@ main:
                 ;copy links data and then shift left in a loop until we stumble upon 1 and then 8-counter
                 ;summing up all the bytes we got and then division by 8 and then round up if there is a remainder (divide with remainder check)
                 ;push back to the stack
+                jmp main_loop
 
             .mul:           ;*
+                jmp main_loop
+
 
         .end_main_loop:
             ret             ; return to main - which called myCalc
@@ -335,7 +340,7 @@ str_to_decimal:
         mov eax, [var]              ; store return value
 
     .no_number:
-        mov eax, STACK_DEF_SIZE    
+        mov eax, [STACK_DEF_SIZE]    
         jmp .end
     .one_letter:
         mov eax, ecx
@@ -345,7 +350,7 @@ str_to_decimal:
         pop ebp
         ret
 
-;;TODO
+
 print_err:
     push ebp            ; backing up base pointer
     mov ebp, esp        ; set ebp to current activation frame
@@ -361,12 +366,101 @@ print_err:
     pop ebp
     ret
 
-
-
-
 free_list:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+    mov ebx, [ebp + 8]  ; get argument which is first link
+
+    mov ecx, [ebx]          ; ecx = curr link
+    cmp [ecx + next], 0     ; if curr.next != null
+    jne .call_again         ; call again with next link
+
+    ; next link is null, delete it 
+    ; clean data
+    pushad
+    push byte [ecx + data]
+    call free
+    add esp, 4          ; clean stack
+    popad
+
+    ; clean next
+    pushad
+    push byte [ecx + next]
+    call free
+    add esp, 4          ; clean stack
+    popad
+
+    ; clean link
+    pushad
+    push byte [ecx]
+    call free
+    add esp, 4          ; clean stack
+    popad
+
+    .call_again:
+        inc ebx
+        push ebx
+        call pop_print_rec
+        add esp, 4        ; clean stack
+
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
 
 free_stack:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+
+    ; while curr_pos != stack_ptr
+    ;   curr_link = pop
+    ;   free_list (curr_link)
+    ;   dec curr_pos
+    ; free_list (curr_link)  
+    
+    ; ecx contains curr cell
+    mov dword ecx, [stack_curr_pos_ptr]
+    .while:
+        dec ecx                         ; first occupied cell
+        mov ebx, ecx
+        sub dword ebx, [stack_ptr]        
+        cmp byte ebx, 0                 ; if ebx == 0, then curr_pos == stack_ptr
+        je .end_while
+        ; this isn't the last cell
+        ; delete and continue to next iteration
+        pushad
+        push dword ecx              ; first link
+        call free_list
+        add esp, 4                  ; clean stack
+        popad
+
+        ; free curr cell
+        pushad
+        push ecx
+        call free
+        add esp, 4                  ; clean stack
+        popad
+
+        jmp .while
+
+        .end_while:     ; last call to free
+            pushad
+            push dword ecx            ; first link
+            call free_list
+            add esp, 4                ; clean stack
+            popad   
+
+            ; free curr cell
+            pushad
+            push ecx
+            call free
+            add esp, 4                 ; clean stack
+            popad
+
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
 
 get_buff_size:
     push ebp            ; backing up base pointer
@@ -390,7 +484,7 @@ get_buff_size:
         ret
 
 
-pop:
+pop_list:
     push ebp            ; backing up base pointer
     mov ebp, esp        ; set ebp to current activation frame
 
@@ -398,8 +492,37 @@ pop:
     mov eax, [stack_curr_pos_ptr]
     mov byte [stack_curr_pos_ptr], 0
 
+
+    mov esp, ebp
+    pop ebp
+    ret
+
+pop_print_rec:
+    push ebp                ; backing up base pointer
+    mov ebp, esp            ; set ebp to current activation frame
+    mov ebx, [ebp + 8]      ; get argument which is first link
+
+    mov ecx, [ebx]          ; ecx = curr link
+    cmp [ecx + next], 0     ; if curr.next != null
+    jne .call_again         ; call again with next link
+
+    ; next link is null, print it's data
+    pushad
+    push byte [ecx + data]
+    push format_number
+    push [stdout]
+    call fprintf
+    add esp, 12          ; clean stack
+    popad
+    jmp .end
+
+    .call_again:
+        inc ebx
+        push ebx
+        call pop_print_rec
+        add esp, 4          ; clean stack
+
     .end:
         mov esp, ebp
         pop ebp
         ret
-
