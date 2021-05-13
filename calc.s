@@ -16,13 +16,22 @@
 %endmacro
 %macro print_debug 1
     pushad                  ; save state
-    push 2                  ; stderr
     push %1                 ; string to print
-    push format_string     
+    push format_string   
+    push dword [stderr]             ; stderr
     call fprintf
+    add esp, 12
     popad                   ; restore state
 %endmacro
-
+%macro testing 1
+    pushad                  ; save state
+    push %1                 ; string to print
+    push format_string  
+    push dword [stdout]             ; stderr
+    call fprintf
+    add esp, 12
+    popad                   ; restore state
+%endmacro
 
 section	.rodata			; we define (global) read-only variables in .rodata section
 	format_number: db "%d", 10, 0	; format string number
@@ -30,6 +39,9 @@ section	.rodata			; we define (global) read-only variables in .rodata section
     error_stack_overflow: db "Error: Operand Stack Overflow", 10, 0
     error_num_of_args: db "Error: Insufficient Number of Arguments on Stack", 10, 0
     prompt: db "calc: ",0
+
+	format_test: db "==== testing ==== number %d", 10, 0	; format string number
+
     
 
 section .data
@@ -68,6 +80,9 @@ section .text
 main:
     push ebp
     mov ebp, esp
+    ; push format_string  
+    ; push dword [stdout]             ; stderr
+    ; call printf
 
     init:     
     mov [counter]   , byte 0
@@ -120,7 +135,7 @@ main:
             push prompt
             call printf
             ; call fgets with 3 parameters
-            push stdin             
+            push dword [stdin]             
             push dword MAX_INPUT_SIZE       ; max lenght
             push dword buffer               ; input buffer
             call fgets
@@ -430,7 +445,7 @@ print_err:
 
     push ebx
     push format_string
-    push stderr
+    push dword [stderr]
     call fprintf
     add esp, 12         ; clean stack
 
@@ -602,7 +617,7 @@ pop_print_rec:
     mov ecx, [ecx + data]
     push ecx
     push format_number
-    push stdout
+    push dword [stdout]
     call fprintf
     add esp, 12          ; clean stack
     popad
