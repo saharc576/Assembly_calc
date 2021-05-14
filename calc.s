@@ -2,6 +2,7 @@
 %define STACK_MIN_SIZE 2
 %define STACK_DEF_SIZE 5
 %define MAX_INPUT_SIZE 80
+%define NODE_LEN 5
 
 %macro cmp_and_set_str 4
     mov esi, %1         ; argv[i] - source string
@@ -23,6 +24,30 @@
     add esp, 12
     popad                   ; restore state
 %endmacro
+%macro print_prompt 0
+    pushad
+    push prompt
+    push format_string
+    call printf
+    add esp, 8      ; clean stack
+    mov dword ecx, [stdout]
+    push ecx
+    call fflush
+    add esp, 4
+    popad
+%endmacro
+%macro get_input 0
+    ; call fgets with 3 parameters
+    pushad
+    mov dword ecx, [stdin]
+    push ecx    
+    push dword MAX_INPUT_SIZE    ; max lenght
+    mov dword ebx, buffer
+    push ebx                    ; input buffer
+    call fgets
+    add esp, 12                     ; remove the 3 pushes from stuck
+    popad
+%endmacro
 %macro testing 1
     pushad                  ; save state
     push %1                 ; string to print
@@ -35,22 +60,24 @@
 
 section	.rodata			; we define (global) read-only variables in .rodata section
 	format_number: db "%d", 10, 0	; format string number
-	format_string: db "%s", 10, 0	; format string
+	format_string: db "%s", 0	    ; format string
     error_stack_overflow: db "Error: Operand Stack Overflow", 10, 0
     error_num_of_args: db "Error: Insufficient Number of Arguments on Stack", 10, 0
     prompt: db "calc: ",0
 
-	format_test: db "==== testing ==== number %d", 10, 0	; format string number
-
+	format_test: db "==== testing ==== ", 10, 0	; format string number
+    argcstr:     db "argc = %d", 10, 0      ; backquotes for C-escapes
+    argvstr:     db "argv[%u] = %s", 10, 0
+    debug_arg:   db "-d", 0
     
 
 section .data
-    size_i:                 ; Used to determine the size of the structure
+    ; size_i:                 ; Used to determine the size of the structure
     struc node
         data:  resb  1
-        next: resd  1
+        next: resb  4
     endstruc
-    node_len: equ $ - size_i     ; Size of the data type
+    ; node_len: equ $ - size_i     ; Size of the data type
 
 
 section .bss
@@ -80,66 +107,81 @@ section .text
 main:
     push ebp
     mov ebp, esp
-    ; push format_string  
-    ; push dword [stdout]             ; stderr
-    ; call printf
-
+    
     init:     
-    mov [counter]   , byte 0
-    mov [debug]     , byte 0
-    mov [stack_size], dword STACK_DEF_SIZE
+    mov byte  [counter]   , 0
+    mov byte  [debug]     , 0
+    mov dword [stack_size], STACK_DEF_SIZE
 
     mov eax, [ebp + 8]          ; initialize counter = argc
-    mov ebx, dword [ebp + 12]   ; **argv
-    mov edx, 0
-    mov ecx, 0                  ; flag
+    mov esi, [ebp + 12]         ; **argv
+    mov ebx, 0                  ; Index of argv
+
     args_loop:
-        inc edx
-        cmp edx, eax
-        je .fin_args_loop
-        ; compare current argument with debug flag
-        cmp_and_set_str dword [ebx + 4*edx], "-d", 2, [debug]
+        mov byte [var], 0           ; nullify
+        inc ebx
+        mov eax, [esi + ebx * 4]    ; *argv[ebx]
+        test eax, eax               ; Null pointer?
+        je .fin_args_loop           ; if it is, finish
 
-        ; if cmp and set didn't set, we'll get here 
+        
+        ; if debug is 1, this arg must be for stack size
+        cmp byte [debug], 1
+        je .get_stack_size
+
+        ; check if curr arg is -d using cmp_str(str1, str2)
         pushad
-        ; str_to_decimal gets two parameters - first is address of string and second is curr position
-        shl edx, 2                ; multiply by 4 = size of ptr
-        push edx
-        push ebx
-        call str_to_decimal
-        mov [stack_size], eax
-        add esp, 4                              ; remove the argument to str_to_octal from stack
+        push eax
+        push debug_arg
+        call cmp_str
+        add esp, 8
+        mov byte [debug], al            ; if equal, 1 is returned. else 0
+        mov byte [var], al              ; store result
         popad
-        jmp args_loop
+
+        cmp dword [var], 1              ; the arg was indeed debug
+        je args_loop                    ; no need to get_stack_size
+
+
+        .get_stack_size:              ; if we got here, it is stack_size arg
+            pushad
+            push eax
+            call str_to_decimal         ; convert to decimal using str_to_decimal(str)
+            add esp, 4
+            mov dword [stack_size], eax ; returned val is the stack size
+            popad
+
+        jmp args_loop               ; loop
+
     .fin_args_loop:
-        push dword [stack_size]
-        call malloc                             ; stack allocation
-        mov [stack_ptr], dword eax          
-        mov [stack_curr_pos_ptr], dword eax     ; curr available position in stack
-
-    ;V; allocate memory for stack
-    ;; init primary pointers for each cell in stack - using macro prim_ptr
-
+        mov dword eax, [stack_size]     
+        mov ecx, NODE_LEN
+        mul ecx                               
+        push eax                              ; eax contains num of bytes to allocate
+        call malloc                           ; stack allocation
+        add esp, 4
+        mov dword [stack_ptr], eax          
+        mov dword [stack_curr_pos_ptr], eax   ; curr available position in stack
+    
     call myCalc                 ; -> pushing return address as well
 
     end_main:    
         push eax                ; push return value of myCalc
         push format_number
         call printf
+        add esp, 8
         ret                     ; ??
 
     myCalc:
         push ebp            ; backing up base pointer
         mov ebp, esp        ; set ebp to current activation frame
         main_loop:
-            push prompt
-            call printf
-            ; call fgets with 3 parameters
-            push dword [stdin]             
-            push dword MAX_INPUT_SIZE       ; max lenght
-            push dword buffer               ; input buffer
-            call fgets
-            add esp, 12                     ; remove the 3 pushes from stuck
+            ; use macros to print prompt (calc: ) and to get input from user 
+            print_prompt
+            get_input
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; works untill here ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
             mov bl, byte [buffer]           ; get first char of buffer
             cmp bl, '0'             
@@ -227,7 +269,7 @@ main:
                 .build_node:
                     ; allocate memory for first node
                     pushad
-                    mov dword ecx, [node_len]
+                    mov dword ecx, NODE_LEN
                     push ecx
                     call malloc
                     add esp, 4                            ; remove the argument from stack
@@ -375,7 +417,7 @@ main:
                 .create_n_push:
                     ; allocate memory for node
                     pushad
-                    mov ecx, [node_len]
+                    mov ecx, NODE_LEN
                     push ecx
                     call malloc
                     add esp, 4                         ; remove the argument from stack
@@ -394,48 +436,6 @@ main:
 
         .end_main_loop:
             ret             ; return to main - which called myCalc
-
-
-str_to_decimal:
-    push ebp            ; backing up base pointer
-    mov ebp, esp        ; set ebp to current activation frame
-    mov ebx, [ebp + 8]  ; get first argument - pointer to begining of string
-    mov edi, [ebp + 12] ; second argument is curr position
-    mov ebx, [ebx + edi]
-
-    ; highest possible number is octal 77, meaning string length <= 2
-    mov cl, byte [ebx]  ; get char
-    cmp cl, 0           
-    je .no_number        ; nothing was given
-
-
-    add ebx, 1          ; move to next char
-    mov bl, [ebx]       ; get next char
-    cmp cl, 0           
-    je .one_letter       ; one letter number
-
-    .two_letter:
-        sub cl, '0'                 ; convert to decimal
-        sub bl, '0'                 ; convert to decimal
-
-        ; convert from octal to decimal and store in eax
-        mov [var], byte bl
-        mov ebx, [var]
-        shl ebx, 3                  ; multiply second letter by 8
-        mov [var], cl               ; move first letter
-        add [var], dword ebx        ; add both
-        mov eax, [var]              ; store return value
-
-    .no_number:
-        mov eax, [STACK_DEF_SIZE]    
-        jmp .end
-    .one_letter:
-        mov eax, ecx
-        jmp .end
-
-    .end:
-        pop ebp
-        ret
 
 
 print_err:
@@ -509,7 +509,7 @@ free_stack:
     ; free_list (curr_link)  
     
     ; ecx contains curr cell
-    mov dword ecx, [stack_curr_pos_ptr]
+    mov dword ecx, [stack_curr_pos_ptr] 
     .while:
         dec ecx                         ; first occupied cell
         mov ebx, ecx
@@ -628,6 +628,74 @@ pop_print_rec:
         push ebx
         call pop_print_rec
         add esp, 4          ; clean stack
+
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
+
+cmp_str:    ; length of comparision is 2
+    push ebp                    ; backing up base pointer
+    mov ebp, esp                ; set ebp to current activation frame
+    mov ebx, [ebp + 8]          ; get str1
+    mov ecx, [ebp + 12]         ; get str2
+
+    .first_char:
+        mov byte al, [ebx]
+        mov byte bl, [ecx]
+        cmp al, bl
+        jne .not_equal
+
+    .second_char:
+        mov ebx, [ebp + 8]          ; get str1 again 
+        mov ecx, [ebp + 12]         ; get str2 again
+        inc ebx
+        inc ecx
+        mov byte al, [ebx]
+        mov byte bl, [ecx]
+        cmp al, bl
+        jne .not_equal
+
+    .equal:
+        mov dword eax, 1
+        jmp .end
+    .not_equal:
+        mov dword eax, 0
+    
+    .end:
+        mov esp, ebp
+        pop ebp
+        ret
+
+
+str_to_decimal:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+    mov ebx, [ebp + 8]  ; get arg - pointer to begining of string
+    
+    xor eax, eax
+    xor ecx, ecx
+
+    ; highest possible number is octal 77, meaning string length <= 2
+    mov byte al, [ebx]  ; get char
+    cmp al, 0           
+    je .no_number       ; nothing was given - default size
+
+    sub al, '0'         ; convert to decimal
+    inc ebx             ; move to next char
+    mov byte cl, [ebx]  ; get next char
+    cmp cl, 0           
+    je .end             ; one letter number
+
+    .two_letter:
+        sub cl, '0'        ; convert to decimal
+        shl al, 3          ; multiply MSB letter by 8
+        add al, cl         ; add both
+        jmp .end
+
+    .no_number:
+        mov eax, STACK_DEF_SIZE    
+        jmp .end
 
     .end:
         mov esp, ebp
