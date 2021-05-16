@@ -67,7 +67,7 @@
     add esp, 4
     popad                   ; restore state
 %endmacro
-%macro testing_num 1
+%macro print_num 1
     pushad                  ; save state
     push %1                 ; string to print
     push format_number  
@@ -216,12 +216,12 @@ main:
     
     call myCalc                 ; -> pushing return address as well
 
-    end_main:    
-        push eax                ; push return value of myCalc
-        push format_number
-        call printf
-        add esp, 8
-        ret                     ; ??
+    end_main:   
+        print_num eax
+        print_str new_line
+        mov esp, ebp
+        pop ebp
+        ret
 
     myCalc:
         push ebp            ; backing up base pointer
@@ -548,6 +548,9 @@ free_list:
     mov ebp, esp        ; set ebp to current activation frame
     mov ebx, [ebp + 8]  ; get argument which is pointer to first link
 
+    test ebx, ebx       ; this cell doesn't contain a list - it is null
+    je .end             ; than finish
+
     cmp dword [ebx + next], 0   ; if curr->next == null
     je .delete                  ; go to base case -> delete it
 
@@ -576,50 +579,45 @@ free_stack:
     push ebp            ; backing up base pointer
     mov ebp, esp        ; set ebp to current activation frame
 
-    ; while curr_pos != stack_ptr
-    ;   curr_link = pop
-    ;   free_list (curr_link)
-    ;   curr_pos-= NODE_LEN
-    ; free_list (curr_link)  
-    
-    
-    mov dword ecx, stack_curr_pos_ptr ; ecx contains address of curr cell 
+    mov dword ecx, [stack_curr_pos_ptr] ; ecx contains address of curr free cell 
+    cmp dword ecx, [stack_ptr]
+    je .end_while                       ; just clear stack allocation, stack is empty
     .while:
-        sub ecx, NODE_LEN               ; first occupied cell
+        sub ecx, 4                      ; first occupied cell
         mov ebx, ecx
-        sub dword ebx, stack_ptr        
+        sub dword ebx, [stack_ptr]        
         cmp dword ebx, 0                ; if ebx == 0, then curr_pos == stack_ptr
-        je .end_while
+        je .end_while                   ; than stack is empty so we are exiting loop to delete
         ; this isn't the last cell
         ; delete and continue to next iteration
         pushad
-        push dword [ecx]             ; first link
-        call free_list
+        push dword [ecx]            ; first link
+        call free_list              ; free curr list
         add esp, 4                  ; clean stack
-        popad
+        popad                       ; restore state
 
-        ; free curr cell
-        pushad
-        push ecx
-        call free
-        add esp, 4                  ; clean stack
-        popad
+        ; ; free curr cell
+        ; pushad
+        ; push ecx
+        ; call free
+        ; add esp, 4                  ; clean stack
+        ; popad                       ; restore state
 
         jmp .while
 
-        .end_while:     ; last call to free
+        .end_while:    
+            ; last call to free - free list in stack[0]
             pushad
             push dword [ecx]           ; pointer to first link
             call free_list
             add esp, 4                ; clean stack
             popad   
-
-            ; free curr cell
-            pushad
-            push ecx
-            call free
-            add esp, 4                 ; clean stack
-            popad
+            .free_stack_allocation:
+                pushad
+                push dword [stack_ptr]
+                call free
+                add esp, 4                 ; clean stack
+                popad
 
     .end:
         mov esp, ebp
@@ -793,5 +791,4 @@ count_bits:
         mov esp, ebp
         pop ebp
         ret
- ; mov byte cl, [var]          ; now cl contains the decimal value of curr->data
                    
