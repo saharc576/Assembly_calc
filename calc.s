@@ -19,14 +19,18 @@
     pushad                  ; save state
     push %1                 ; string to print
     push format_string   
-    push dword [stderr]             ; stderr
+    push dword [stderr]      
     call fprintf
     add esp, 12
+    mov dword ecx, [stderr]
+    push ecx
+    call fflush
+    add esp, 4
     popad                   ; restore state
 %endmacro
-%macro print_prompt 0
+%macro print_str 1
     pushad
-    push prompt
+    push %1
     push format_string
     call printf
     add esp, 8      ; clean stack
@@ -48,6 +52,21 @@
     add esp, 12                     ; remove the 3 pushes from stuck
     popad
 %endmacro
+%macro print_data 1
+    pushad      
+    mov dword ecx, %1
+    xor ebx, ebx                
+    mov byte bl, [ecx + data]
+    push ebx                 ; string to print
+    push format_number  
+    call printf
+    add esp, 8
+    mov dword ecx, [stdout]
+    push ecx
+    call fflush
+    add esp, 4
+    popad                   ; restore state
+%endmacro
 %macro testing_num 1
     pushad                  ; save state
     push %1                 ; string to print
@@ -61,10 +80,11 @@
     popad                   ; restore state
 %endmacro
 %macro testing_pointer 1
-    pushad                  ; save state
+    pushad      
     mov dword ecx, %1
-    mov dword ecx, [ecx + data]
-    push dword ecx                 ; string to print
+    xor ebx, ebx            ; save state
+    mov byte bl, [ecx + data]
+    push ebx                 ; string to print
     push format_pointer  
     call printf
     add esp, 8
@@ -88,12 +108,13 @@
 %endmacro
 
 section	.rodata			; we define (global) read-only variables in .rodata section
-	format_number: db "%d", 10, 0	; format string number
+	format_number: db "%d", 0	; format string number
 	format_string: db "%s", 0	    ; format string
     error_stack_overflow: db "Error: Operand Stack Overflow", 10, 0
     error_num_of_args: db "Error: Insufficient Number of Arguments on Stack", 10, 0
     prompt: db "calc: ",0
     debug_arg:   db "-d", 0
+    new_line:    db "", 10, 0
 
 	format_test: db "==== testing ==== ", 10, 0	; format string number
 	format_pointer: db "value is %d", 10, 0	; format string number
@@ -185,7 +206,7 @@ main:
 
     .fin_args_loop:
         mov dword eax, [stack_size]     
-        mov ecx, NODE_LEN
+        mov ecx, 4
         mul ecx                               
         push eax                              ; eax contains num of bytes to allocate
         call malloc                           ; stack allocation
@@ -207,7 +228,7 @@ main:
         mov ebp, esp        ; set ebp to current activation frame
         main_loop:
             ; use macros to print prompt (calc: ) and to get input from user 
-            print_prompt
+            print_str prompt
             get_input
 
             mov byte bl, [buffer]           ; get first char of buffer
@@ -224,14 +245,16 @@ main:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; build_list seems to work fine -- if we don't add [stack_size] it does point to same place ;;;;;;;;;;;;;;;;;;;;
 
         build_list:    
-            ; check room in stack
-            mov ecx, [stack_ptr]  
-            mov dword eax, [stack_size]      
+            ; check for room in stack
+            mov ecx, [stack_ptr]            ; base pointer
+            mov dword eax, [stack_size]     ; total size
+            mov dword ebx, 4                ; cell size 
+            mul ebx                         ; eax = eax*ebx -> eax is num of bytes allocated for stack
             add ecx, eax                    ; ecx points to the end of the stack array
             sub ecx, [stack_curr_pos_ptr]   ; sub from ecx the current location    
             cmp ecx, 0                      ; check if stack_curr_pos_ptr is end of stack
             jg .start_loop
-            
+
             pushad
             push error_stack_overflow
             call print_err
@@ -291,33 +314,31 @@ main:
 
 
                 .build_node:
-
-                    ; allocate memory for first node
+                    ; allocate memory for node
                     pushad
                     mov dword ecx, NODE_LEN
                     push ecx
                     call malloc
-                    add esp, 4                            ; remove the argument from stack
+                    add esp, 4                            ; clean stack after malloc
                     mov dword [var], eax                  ; store pointer to allocation
                     popad                                 ; restore registers
                     mov dword eax, [var]                  ; restore the pointer
                     mov byte [eax + data], cl             ; set data
                     mov byte [eax + next], 0              ; set next to null
-                    cmp dword [flag], 1
-                    jne .not_first
+                    cmp dword [flag], 1                     
+                    jne .not_first                        ; if flag is on (=1) this is not the first
 
                     .first:
-                        mov dword [flag], 0               ; lower flag - not first anymore
+                        mov dword [flag], 0                 ; lower flag - not first anymore
                         mov dword ebx, [stack_curr_pos_ptr] ; ebx contains pointer to curr position in stack
-                        mov [ebx], eax                      ; change data in curr position of stack -> to curr link
-                        testing_pointer [stack_curr_pos_ptr]
-                        testing_pointer [ebx]
-                        mov dword [prev_node_ptr], eax    ; store pointer to curr to build list
+                        mov dword [ebx], eax                ; change data in curr position of stack -> to curr link
+                        mov dword [prev_node_ptr], eax      ; store pointer to curr to build list
                         jmp .loop
                     .not_first:
                         mov dword ebx, [prev_node_ptr]    ; restore ptr to prev
                         mov [ebx + next], eax             ; point prev node to next node
                         mov dword [prev_node_ptr], eax    ; store pointer to curr
+                        mov dword ebx, [stack_curr_pos_ptr] ; ebx contains pointer to curr position in stack
                         jmp .loop                     ; loop
 
 
@@ -325,33 +346,16 @@ main:
                 ;  https://codehost.wordpress.com/2011/07/29/59/
 
         .end_build_list:
-
-            testing_no_num
-            mov dword ebx, [stack_curr_pos_ptr]
-            testing_pointer [stack_curr_pos_ptr]
-            testing_pointer [ebx]
-
-            ; mov dword ebx, [stack_curr_pos_ptr]
-            ; testing_pointer [ebx]
-            ; mov dword ebx, [ebx]
-            ; testing_pointer [ebx + next]
-            ; testing_no_num
-
             mov dword eax, [stack_curr_pos_ptr]
-            add eax, NODE_LEN
+            add eax, 4                          ; go to next cell
             mov dword [stack_curr_pos_ptr], eax
             jmp main_loop
         
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; works untill here ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; list is built (probably) but for ex. can't pop_n_print in .end_build_list, probaly problem in 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; in .end_build_list
         operator:
-            jmp .pop_n_print
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; this works from here ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+            xor ebx, ebx
             inc dword [counter]            ; increase operations counter
             mov byte bl, [buffer]         ; get curr char - it must be an operator
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; to here ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
- 
+
             ; call the appropriate function for this operator
             cmp byte bl, 'q'
             je .quit
@@ -362,12 +366,12 @@ main:
             cmp byte bl, 'd'
             je .duplicate                ; jump to duplicate
             cmp byte bl, '&'
-            jmp .and                     ; jump to and
+            je .and                     ; jump to and
             cmp byte bl, 'n'
             je .num_bytes                ; jump to number of bytes
             cmp byte bl, '*'
             je .mult                     ; jump to multiply
-
+ 
             .quit:
                 dec dword [counter]            ; decrease operations counter - not counting quit
                 call free_stack
@@ -392,22 +396,20 @@ main:
             jmp main_loop
             
             .pop_n_print:   ;p
-                testing_no_num
                 pushad
-                call pop_list
-                mov dword [var], eax
+                call pop_list                     ; pop the last node address in stack
+                mov dword [prev_node_ptr], eax    ; store return value before poping regs
                 popad
-                mov dword eax, [var]
+                mov dword eax, [prev_node_ptr]    ; restore return value
                 cmp al, '-'         ; this means stack is empty, an error was printed
                 je .skip
-
-                testing_pointer eax
 
                 pushad
                 push eax
                 call pop_print_rec
                 add esp, 4
                 popad
+                print_str new_line    
 
                 ; delete list
                 push eax
@@ -429,76 +431,93 @@ main:
 
             
             .num_bytes:     ;n 
-                .start: 
-                    mov dword ebx, 0         ; init counter
+                .start:
                     call pop_list
                     cmp al, '-'             ; empty stack, error was printed
                     je main_loop
+                    mov esi, eax            ; store the pointer to first link -> to delete it later
+                    mov byte [var], 0       ; init counter
                 .loop:
-                    cmp dword eax, 0             ; check if null
-                    je .done
+                    test eax, eax               ; curr_link = eax is null?
+                    je .done                    ; if yes, we are done
+
+                    xor ecx, ecx                ; nullify
                     mov byte cl, [eax + data]   ; get curr link data
-                    ; change it to decimal
+                    
+                    ; count bits in node data 
+                    ; data is max 2 chars number -> count bits for each char
                     pushad
                     mov eax, ecx
                     xor edx, edx
-                    mov ebx, 10
+                    mov ebx, 10                 
                     div ebx
-                    shl eax, 3                  ; mul res by 8
-                    add eax, edx                ; add remainder*1
-                    mov byte [var], al          ; store before popad
+
+                    push eax
+                    call count_bits
+                    add esp, 4
+                    add byte [var], al
+
+                    push edx
+                    call count_bits
+                    add esp, 4
+                    add byte [var], al
+
                     popad
 
-                    mov byte cl, [var]          ; now cl contains the decimal value of curr.data
-                    mov edi, 9                  ; counter for num of bits- 6 is max number but cl is 8-bits
-                    .count_bits:
-                        dec edi                     ; first decreasing, that's the reason edi initialized with 9
-                        shl cl, 1
-                        jnc .count_bits
-                    add ebx, edi            ; add curr num of bits to counter
                     mov eax, [eax + next]   ; get next
                     jmp .loop
 
                     .done:  ; divide by 8 and round up, get number of bits
-                        pushad
-                        push eax
-                        call free_list
-                        add esp, 4              ; clean stack
-                        popad
-
+                        xor ebx, ebx
                         xor ecx, ecx            ; nullify
                         xor eax, eax            ; nullify
+                        mov byte bl, [var]
+                       
                         ; ebx % 8 == 0  <-->  three right shifts will NOT set carry flag
-                        shr ebx, 1
+                        shr ebx, 1          ; divide by 2
                         setc cl
-                        shr ebx, 1
+                        shr ebx, 1          ; divide by 2 (total 2*2=4)
                         setc al
 
-                        or al, cl
+                        or al, cl           ; al contains 1 <-> cl or al contained 1
                         xor ecx, ecx
-                        shr ebx, 1
+                        shr ebx, 1          ; divide by 2 (total 2*2*2=8)
                         setc cl
-
                         or al, cl
 
-                        cmp dword ecx, 0
+                        cmp dword eax, 0
                         je .create_n_push
+
                         .round_up:      ; there was remainder
-                            add dword ebx, 1
+                            inc ebx
 
                 .create_n_push:
+                    ; first, clean the memory of the popped list
+                    pushad
+                    push esi                ; esi is the pointer to the first link
+                    call free_list          ; first we clean the current linked list 
+                    add esp, 4              ; clean stack
+                    popad
                     ; allocate memory for node
                     pushad
-                    mov ecx, NODE_LEN
+                    mov dword ecx, NODE_LEN
                     push ecx
                     call malloc
-                    add esp, 4                         ; remove the argument from stack
-                    popad
-                    mov byte [eax + data], bl          ; set data
-                    mov byte [eax + next], 0           ; set next to null
+                    add esp, 4                            ; clean stack after malloc
+                    mov dword [prev_node_ptr], eax        ; store pointer to allocation
+                    popad                                 ; restore registers
+                    mov dword eax, [prev_node_ptr]        ; restore the pointer
+                    mov byte [eax + data], bl             ; set data (it's in ebx)
+                    mov dword [eax + next], 0             ; set next to null
 
-                    mov [stack_curr_pos_ptr], eax  
-                    inc byte [stack_curr_pos_ptr]
+                    ; store it in curr position
+                    mov dword ebx, [stack_curr_pos_ptr]   ; ebx contains pointer to curr position in stack
+                    mov dword [ebx], eax                  ; change data in curr position of stack -> to curr link
+                    
+                    ; increment curr_position
+                    mov dword eax, [stack_curr_pos_ptr]
+                    add eax, 4                          
+                    mov dword [stack_curr_pos_ptr], eax
 
                     jmp main_loop
 
@@ -518,11 +537,8 @@ print_err:
     mov ebp, esp        ; set ebp to current activation frame
     mov ebx, [ebp + 8]  ; get argument which is a string
 
-    push ebx
-    push format_string
-    push dword [stderr]
-    call fprintf
-    add esp, 12         ; clean stack
+
+    print_debug ebx     ; debug prints to stderr, so we can use it
 
     mov esp, ebp
     pop ebp
@@ -533,41 +549,24 @@ free_list:
     mov ebp, esp        ; set ebp to current activation frame
     mov ebx, [ebp + 8]  ; get argument which is pointer to first link
 
-    mov ecx, [ebx]              ; ecx = curr link
-    cmp dword [ecx + next], 0   ; if curr.next == null
-    je .call_again              ; delete
-                                ; else, call again recursively
+    cmp dword [ebx + next], 0   ; if curr->next == null
+    je .delete                  ; go to base case -> delete it
 
     .call_again:
-        push dword [ecx + next]
-        call free_list
-        add esp, 4        ; clean stack
+        mov dword ecx, [ebx + next]
+        push ebx                    ; store the current link
+        push ecx                    ; parameter to next call is curr->next
+        call free_list          
+        add esp, 4                  ; clean stack
+        pop ebx                     ; restore curr link
 
     .delete:    
-    ; next link is null, delete it 
-    ; clean data
-    pushad
-    xor ecx, ecx
-    mov byte cl, [ecx + data]
-    push ecx
-    call free
-    add esp, 4          ; clean stack
-    popad
-
-    ; clean next
-    pushad
-    mov dword ecx, [ecx + next]
-    push ecx
-    call free
-    add esp, 4          ; clean stack
-    popad
-
-    ; clean link
-    pushad
-    push ecx
-    call free
-    add esp, 4          ; clean stack
-    popad
+        ; clean link
+        pushad
+        push ebx
+        call free
+        add esp, 4          ; clean stack
+        popad
 
     .end:
         mov esp, ebp
@@ -663,18 +662,14 @@ pop_list: ; returns '-' if there are no elements
     je .error
 
     ; else, there are args in cell
-    xor eax, eax
-    mov eax, [stack_curr_pos_ptr]
-    sub eax, NODE_LEN
-    mov dword ebx, [eax]
+    xor eax, eax                    ; nullify 
+    mov eax, [stack_curr_pos_ptr]   ; eax = address of the current free cell
+    sub eax, 4                      ; eax = eax - cell_size, to get first occupied cell
+    mov dword ebx, [eax]            ; ebx = address of node in first occupied cell
 
-    testing_no_num
-    testing_pointer eax
-    testing_no_num
-
-    mov dword [stack_curr_pos_ptr], eax
-    mov byte [eax], 0
-    mov dword eax, ebx
+    mov dword [stack_curr_pos_ptr], eax     ; set curr free position to eax (the current first occupied cell)
+    mov dword [eax], 0                      ; set the cell to contain null
+    mov dword eax, ebx                      ; store return value in eax
     jmp .end
 
     .error:
@@ -692,28 +687,21 @@ pop_list: ; returns '-' if there are no elements
 pop_print_rec:
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
-    mov ebx, [ebp + 8]          ; get argument which is first link
+    mov ebx, [ebp + 8]          ; get argument which is first link address
 
-    mov ecx, [ebx]              ; ecx = curr link
-    cmp dword [ecx + next], 0   ; if curr.next != null
-    jne .call_again             ; call again with next link
-
-    ; next link is null, print it's data
-    pushad
-    mov ecx, [ecx + data]
-    push ecx
-    push format_number
-    push dword [stdout]
-    call fprintf
-    add esp, 12          ; clean stack
-    popad
-    jmp .end
+    cmp dword [ebx + next], 0   ; if curr->next == null
+    je .base_case               ; go to base case -> print data
 
     .call_again:
-        inc ebx
-        push ebx
-        call pop_print_rec
-        add esp, 4          ; clean stack
+        mov dword ecx, [ebx + next]
+        push ebx                    ; store the current link
+        push ecx                    ; parameter to next call is curr->next
+        call pop_print_rec          
+        add esp, 4                  ; clean stack
+        pop ebx                     ; restore curr link
+   
+    .base_case:
+        print_data ebx
 
     .end:
         mov esp, ebp
@@ -787,3 +775,24 @@ str_to_decimal:
         mov esp, ebp
         pop ebp
         ret
+
+count_bits:
+    push ebp            ; backing up base pointer
+    mov ebp, esp        ; set ebp to current activation frame
+    mov ebx, [ebp + 8]  ; get arg - data of node
+
+    mov edi, 9          ; counter for num of bits- set to 9 cause we decrease first thing
+    .loop:
+        cmp edi, 0
+        je .end
+        dec edi                     
+        shl bl, 1       ; if 1 was "popped", edi is the number of occupied bits
+        jnc .loop
+
+    .end:   
+        mov eax, edi        ; return value
+        mov esp, ebp
+        pop ebp
+        ret
+ ; mov byte cl, [var]          ; now cl contains the decimal value of curr->data
+                   
