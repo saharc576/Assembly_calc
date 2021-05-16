@@ -242,7 +242,6 @@ main:
                 ; it is defitily a number
                 jmp build_list  
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; build_list seems to work fine -- if we don't add [stack_size] it does point to same place ;;;;;;;;;;;;;;;;;;;;
 
         build_list:    
             ; check for room in stack
@@ -324,7 +323,7 @@ main:
                     popad                                 ; restore registers
                     mov dword eax, [var]                  ; restore the pointer
                     mov byte [eax + data], cl             ; set data
-                    mov byte [eax + next], 0              ; set next to null
+                    mov dword [eax + next], 0             ; set next to null
                     cmp dword [flag], 1                     
                     jne .not_first                        ; if flag is on (=1) this is not the first
 
