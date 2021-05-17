@@ -134,6 +134,7 @@ section .bss
     spt                 resd   1     ; stack pointer
     buffer              resb   MAX_INPUT_SIZE
     buffer_len          resb   MAX_INPUT_SIZE
+    aux_buffer          resb   MAX_INPUT_SIZE
     counter             resb   32    ; the total numebr of operations that were made
     debug               resb   1
     stack_size          resb   8     ; default is STACK_DEF_SIZE
@@ -242,7 +243,9 @@ main:
                 jg operator                 ; it is not a number
                 ; it is defitily a number
                 pushad
+                push buffer
                 call build_list 
+                add esp, 4
                 popad
                 jmp main_loop
         
@@ -273,109 +276,145 @@ main:
                 jmp .end_main_loop
 
             .add:           ;+
+                
+            mov ebx, [stack_curr_pos_ptr]
+            sub ebx, [stack_ptr]
+            cmp ebx, 2
+            jb .error
+            call pop_list
+            mov edx, eax            ; store address of l1 in edx
+            push edx                ; save pointer to l1
+            call pop_list          
+            pop edx                 ; restore pointer to l1
+            mov ecx, eax            ; store address of l2 in ecx
+            push ecx                ; save regs, restore later - after padding
+            push edx
+            xor esi, esi            ; counter for malloc
+
+            .padding:
+                add esi, 2
+                cmp dword [ecx + next], 0
+                je .pad_first
+                cmp dword [edx + next], 0
+                je .pad_second
+                mov ecx, [ecx + next]
+                mov edx, [edx + next]
+                jmp .padding
+
+            .pad_first:
+                cmp dword [edx + next], 0
+                je .add_node
                 pushad
-                call pop_list                     ; pop the last node address in stack
-                mov dword [prev_node_ptr], eax    ; store return value before poping regs
-                popad
-                mov dword eax, [prev_node_ptr]    ; restore return value
-                cmp al, '-'         ; this means stack is empty, an error was printed
-                je .end_add
+                push ecx
+                push dword 0
+                call build_node
+                add esp, 8
+                popad   
+                mov edx, [edx + next]
+                mov ecx, [ecx + next]
+                jmp .padding
 
-                mov edi, eax        ; store pointer to l1
+            .pad_second:
                 pushad
-                call pop_list                     ; pop the last node address in stack
-                mov dword [prev_node_ptr], eax    ; store return value before poping regs
-                popad
-                mov dword eax, [prev_node_ptr]    ; restore return value
-                cmp al, '-'         ; this means stack is empty, an error was printed
-                je .fix
-
-                mov esi, eax        ; store pointer to l2
-
-                ; l1 pointer is in edi, l2 pointer is in esi
-                push esi
-                push edi
-                call get_list_len 
-                add esp, 4
-                pop esi
-                mov ebx, eax        ; ebx contains length of l1
-
-                push edi
-                push esi
-                call get_list_len 
-                add esp, 4
-                pop edi
-                mov edx, eax        ; edx contains length of l2
-
-                ; pad both lists with target length of the other link
-                push ebx
-                push edi
                 push edx
-                call pad_list   ; pad l1, target length is edx (=len of l2)
+                push dword 0
+                call build_node
                 add esp, 8
-                pop ebx
+                popad
+                mov ecx, [ecx + next]
+                mov edx, [edx + next]
+                jmp .padding
                 
+            .add_node:
+                pop edx               ; restore pointers to begining of lists
+                pop ecx
+                
+                push ecx
                 push edx
+                ; allocate two buffers that will use to create the sum list
+                push esi            ; store esi
+                push esi            ; argument for malloc
+                call malloc 
+                add esp, 4          ; clean stack
+                mov edi, eax        ; edi contains address of first buffer
+                pop esi             ; restore esi - size of allocation
+                
                 push esi
-                push ebx
-                call pad_list   ; pad l2, target length is ebx (=len of l1)
-                add esp, 8
-                pop edx
-
-                mov byte [var], 0      ; carry is 0
+                call malloc 
+                mov edi, eax        ; edi contains address of second buffer
+                add esp, 4          ; clean stack
+                mov esi, eax        ; esi contains address of second buffer
+               
+                pop edx               ; restore pointers to begining of lists
+                pop ecx
+   
                 
                 pushad
-                push esi
-                push edi
-                call add_links_rec  ; creates buffer with data
-                add esp, 8
+                push edi            ; first buffer
+                push ecx            ; l1
+                push edx            ; l2
+                call add_lists
+                add esp, 12          ; clean stack
+                mov dword [var], eax   ; store pointer to end of first buffer
                 popad
 
-                pushad
-                call build_list
-                popad
+                pushad              ; store regs for later free
 
-                ; free l1
-                pushad
-                push edi
-                call free_list
-                popad
+                testing_no_num
+                print_num 1
+                print_str new_line
 
-                ; free l2
-                pushad
-                push edi
-                call free_list
-                popad
+                mov dword eax, [var]   ; restore pointer to end of first buffer
+                .reverse_loop:
+                    cmp byte [eax], 0
+                    je .build
 
-                jmp main_loop
+                    mov byte bl, [eax]  ; curr char
+                    mov byte [esi], bl  ; put it in second buffer
 
+                    inc esi
+                    dec eax
+                    jmp .reverse_loop
 
-            ;V; pop two linked lists l1 l2 and save them in regs
-            ;V; pad the shorter linked list - add zero links by calling build node
-            ; loop simultaniousely on both l1 l2 and send curr link of both to add_link + carry of last add_link (first is 0)
-            ; if done, check if there is carry. if there is, create another node with data = carry. 
-            ;
-            ; after all, free memory, and push res
+                .build:
+                    mov byte [esi], 0  ; put null char in second buffer
+                    popad              ; restore pointer to begining of esi
+                    pushad
+                    push esi
+                    call build_list
+                    add esp, 4
+                    popad
 
-            ; add_link:
-            ; sum three right bites of both linkes + carry of last add_link
-            ; if res <= 7 do nothing. 
-            ; else add 2 to res, then sub 10 and add 1 to carry.
-            ; then sum next 3 bits of both links with carry
-            ; do same as before with carry
-            ; build res node with current data
-
-            .fix:   ;return l1 to stack to restore previous state of stack
-                ; store edi in curr position
-                mov dword ebx, [stack_curr_pos_ptr]   ; ebx contains pointer to curr position in stack
-                mov dword [ebx], edi                  ; change data in curr position of stack -> to curr link
-                
-                ; increment curr_position
-                mov dword eax, [stack_curr_pos_ptr]
-                add eax, 4                          
-                mov dword [stack_curr_pos_ptr], eax
+            .error:
+                push error_num_of_args
+                call print_err
+                add esp, 4
 
             .end_add:
+                pushad
+                push esi
+                call free       ; free first buffer
+                add esp, 4
+                popad
+                 
+                pushad
+                push edi
+                call free       ; free second buffer
+                add esp, 4
+                popad
+                 
+                pushad
+                push ecx
+                call free_list     ; free first list
+                add esp, 4
+                popad
+
+                pushad
+                push edx
+                call free_list     ; free second list
+                add esp, 4
+                popad
+
                 jmp main_loop
             
             .pop_n_print:   ;p
@@ -442,7 +481,7 @@ main:
                     mov ebx, [stack_curr_pos_ptr]
                     sub ebx, [stack_ptr]
                     cmp ebx, 2
-                    jb .error
+                    jb ._error
 
                     call pop_list
                     mov ebx, eax
@@ -510,7 +549,7 @@ main:
                     mov ecx, [ecx + next]
                     jmp .bitwise_and
 
-                .error:
+                ._error:
                     push error_num_of_args
                     call print_err
                     add esp, 4
@@ -852,7 +891,7 @@ pop_print_rec:
         cmp byte [flag], 0          ; else, check if this is the first printing. 
         jne .skip                    ; if it is (flag = 1), print leading zero
         print_str zero_str          ; if yes, add leading zero
-        
+
         .skip:
             mov byte [flag], 0          ; lower flag
             print_data ebx
@@ -1058,36 +1097,56 @@ build_node:
         pop ebp
         ret
 
-add_links_rec:
+add_lists:
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
     mov ebx, [ebp + 8]          ; get argument which is l1 first link address
     mov ecx, [ebp + 12]         ; get argument which is l2 first link address
+    mov esi, [ebp + 16]         ; pointer to buffer
 
-    cmp dword [ebx + next], 0   ; if curr->next == null
-    je .base_case               ; go to base case -> print data
+    mov byte [flag], 0          ; represents the carry
 
-    .call_again:
-        mov dword esi, [ecx + next]
-        mov dword edi, [ebx + next]
-        push ecx                    ; store the current link of l2
-        push ebx                    ; store the current link of l1
+    mov byte [esi], 0    ; null char
+    inc esi
+    mov byte [esi], 10   ; \n
+    dec esi             ; point to begining 
 
-        push esi                    ; parameter to next call is curr->next (of l2)
-        push edi                    ; parameter to next call is curr->next (of l1)
-        call add_links_rec          
-        add esp, 8                  ; clean stack
+    
+    
+    .loop:
+        test ecx, ecx               ; if curr == null
+        je .end                     ; done 
 
-        pop ebx                     ; restore curr link (of l1)
-        pop ecx                     ; restore curr link (of l2)
-   
-    .base_case:
+        add esi, 2                  ; increment pointer by 2
+        pushad
+        push esi
         push ebx
         push ecx
         call add_links_data
-        add esp, 8                  ; clean stack
+        add esp, 12                  ; clean stack
+        mov byte [flag], al         ; return value is the carry
+        popad
+        mov dword ebx, [ebx + next] ; get next l1
+        mov dword ecx, [ecx + next] ; get next l2
+   
+        jmp .loop   
+
+        ; if carry != 0, add to buffer
+        cmp byte [flag], 0
+        je .no_carry
+
+        .carry:
+            add esi, 2      ; point to the next free position
+            mov byte [esi], 1
+        
+        .no_carry:
+            inc esi
+            cmp byte [esi], 0
+            jne .end
+            dec esi
         
     .end:
+        mov eax, esi
         mov esp, ebp
         pop ebp
         ret
@@ -1097,74 +1156,132 @@ add_links_data:
     mov ebp, esp                ; set ebp to current activation frame
     mov ecx, [ebp + 8]          ; get address of link in l1
     mov ebx, [ebp + 12]         ; get address of link in l2
+    mov esi, [ebp + 16]         ; pointer to buffer
+    mov dword [var], esi    
 
-    mov byte cl, [ecx + data]
-    mov byte bl, [ebx + data]
-
-    ; change first link to octal
-    mov eax, ecx
-    xor edx, edx
-    mov esi, 10                 
-    div esi
-    
-    mov esi, 8
-    mul esi               ; eax = eax * 8
-
-    add eax, edx          ; eax = eax + remainder from before
-    
-    ; store first value 
-    push eax
-
-    ; change second link to octal
-    mov eax, ebx
-    xor edx, edx
-    mov esi, 10                 
-    div esi
-    
-    mov esi, 8
-    mul esi               ; eax = eax * 8
-
-    add eax, edx          ; eax = eax + remainder from before
-
-    mov ebx, eax          ; store second value
-    pop eax               ; restore first value
-
-    add eax, ebx          ; eax contains the added values
-
-    ; change the value to octal reprasentaion
-    xor edx, edx
+    mov byte al, [ecx + data]
+    xor ecx, ecx
+    mov cl, al
+    mov byte al, [ebx + data]
     xor ebx, ebx
-    mov esi, 8
-    .loop:      ; divide the decimal number by 8, add the quatation to buffer
-        cmp eax, 0
-        je .last
-        div esi           ; eax / esi --> edx contains the remainder (actually only dl)
+    mov bl, al
 
-        mov dword ebx, buffer
-        mov byte [ebx], dl
-        inc ebx
-        jmp .loop
+    ; testing_no_num
+    ; print_str new_line
 
-    .last:
-        div esi           ; eax / esi --> edx contains the remainder
+    ; print_num ebx
+    ; print_str new_line
 
-        mov dword ebx, buffer
-        mov byte [ebx], dl
-        inc ebx
- 
+    ; testing_no_num
+    ; print_str new_line
+
+    ; print_num ecx
+
+    ; change first link to decimal
+    xor eax, eax
+    xor edx, edx
+    mov eax, ecx          ; eax contains data of link in l1
+    mov esi, 10           ; divisor      
+    div esi
+    
+    push edx
+    ;mov dl, al            ; MSB of l1
+    ;shr eax, 8            ; LSB of l2
+    ;mov ecx, eax          ; store LSB in ecx
+    ;mov eax, edx          ; store MSB in eax
+
+    mov esi, 8            ; multiplication product
+    mul esi               ; eax = eax * 8
+
+    pop edx
+    add edx, eax          ; ecx contain decimal value of link in l1
+    mov ecx, edx
+
+    
+    ; testing_no_num
+    ; print_str new_line
+
+    ; testing_no_num
+    ; print_str new_line
+    ; print_num ecx
+
+    ; change second link to decimal
+    xor eax, eax
+    xor edx, edx
+    mov eax, ebx          ; eax contains data of link in l1
+    mov esi, 10           ; divisor      
+    div esi
+    
+    push edx
+
+    ;mov dl, al            ; MSB of l1
+    ;shr eax, 8            ; LSB of l2
+    ;mov ebx, eax          ; store LSB in ecx
+    ;mov eax, edx          ; store MSB in eax
+
+    mov esi, 8            ; multiplication product
+    mul esi               ; eax = eax * 8
+
+    pop edx
+
+    add eax, edx          ; ebx contain decimal value of link in l2
+    mov ebx, eax
+    
+    ; testing_no_num
+    ; print_str new_line
+    ; print_num ebx
+
+    ; add both links with previous carry (flag)
+    ; if result is a 3 digit number, set carry to 1 and remove MSB
+    add ecx, ebx
+    xor ebx, ebx
+    add byte bl, [flag]
+    add ebx, ecx
+    mov ecx, ebx        ; store result in eax
+    mov byte [flag], 0  ; reset carry flag
+
+    
+    mov dword ebx, [var]    ; restore pointer to buffer
+    mov edi, 2
+    ; change to octal
+    .loop:
+    cmp edi, 0
+    je .check_carry
+    mov eax, ecx
+    mov esi, 8          ; divisor
+    div esi
+    mov eax, ecx
+    shr eax, 3
+
+    mov byte [ebx], dl  
+    inc ebx
+    dec edi
+    mov ecx, eax
+    jmp .loop
+
+    .check_carry:
+        cmp eax, 0 
+        je .end
+
+    mov byte [flag], 1  ; raise carry flag
+
     .end:
-        mov byte [ebx], 10  ; add \n
-        inc ebx             
-        mov byte [ebx], 0
+        sub ebx , 2
+        testing_no_num
+        print_str ebx
+        print_str new_line
+        add ebx ,2
+
         mov esp, ebp
         pop ebp
         ret
 
-build_list:    
 
+
+build_list:    
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
-    ; mov ecx, [ebp + 8]          ; get buffer
+    mov esi, [ebp + 8]          ; get buffer
 
 
     ; check for room in stack
@@ -1189,7 +1306,7 @@ build_list:
     .start_loop:
     ; get buffer length
         pushad
-        push buffer
+        push esi
         call get_buff_size
         add esp, 4                      ; clean stack
         mov [buffer_len], eax
@@ -1199,7 +1316,7 @@ build_list:
     ; make buffer point to end of the array
     ; edi holds the pointer
     xor edi, edi
-    mov dword edi, buffer
+    mov dword edi, esi
     add dword edi, [buffer_len]        ; point to the end 
     dec edi                            ; decrease one to point last element
     mov dword [flag], 1                ; flag for first node creation
