@@ -333,6 +333,7 @@ main:
                 push ecx
                 push edx
                 ; allocate two buffers that will use to create the sum list
+                add esi, 2          ; for \n and null char
                 push esi            ; store esi
                 
                 push esi            ; argument for calloc
@@ -371,13 +372,19 @@ main:
                 pushad              ; store regs for later free(*)
 
                 mov dword eax, [var]   ; restore pointer to end of first buffer
+                
+                ; in case there wasn't carry - we want to increment the pointer
+                ; else we don't
                 inc eax
+                cmp byte [eax], 0
+                jne .reverse_loop
+                dec eax
                 
                 .reverse_loop:
                     cmp byte [eax], 10
                     je .build
 
-                    mov byte bl, [eax]  ; curr char which is a number - not a char
+                    mov byte bl, [eax]  ; curr char
                     mov byte [esi], bl  ; put it in second buffer
 
                     inc esi          
@@ -408,11 +415,11 @@ main:
                 add esp, 4
                 popad
                  
-                ; pushad
-                ; push edi
-                ; call free       ; free second buffer
-                ; add esp, 4
-                ; popad
+                pushad
+                push edi
+                call free       ; free second buffer
+                add esp, 4
+                popad
                  
                 pushad
                 push ecx
@@ -1016,56 +1023,6 @@ get_list_len:
         pop ebp
         ret
 
-pad_list:
-    push ebp                    ; backing up base pointer
-    mov ebp, esp                ; set ebp to current activation frame
-    mov ebx, [ebp + 8]          ; get argument which is first link address
-    mov eax, [ebp + 12]         ; second argument is target len
-
-    ; get list len
-    pushad
-    push ebx
-    call get_list_len
-    mov dword [var], eax
-    add esp, 4
-    popad
-
-    ; if target len is shorter or equal, nothing happens
-    cmp dword eax, [var]
-    jbe .end
-
-    sub dword eax, [var]        ; eax contains number of nodes to add
-    mov esi, eax                ; store in esi
-
-    ; iterate list to get the last one, and start adding nodes
-    .loop:
-        cmp dword [ebx + next], 0   ; if curr->next == null
-        je .while                   ; done
-
-        mov dword ebx, [ebx + next] ; get next
-        jmp .loop
-
-    
-    .while: 
-        cmp esi, 0              ; if esi == 0
-        je .end                 ; done
-
-        push esi
-        push 0                  ; node data
-        push 1                  ; not first
-        push ebx                ; node address
-        call build_node
-        add esp, 12
-        pop esi
-        mov ebx, eax            ; move return value (=address of added node) to ebx
-        dec esi
-        jmp .while
-
-    .end:
-        mov esp, ebp
-        pop ebp
-        ret
-
 build_node:
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
@@ -1119,7 +1076,7 @@ add_lists:
     
     .loop:
         test ecx, ecx               ; if curr == null
-        je .end                     ; done 
+        je .check_carry             ; done 
 
         add esi, 2                  ; increment pointer by 2
         pushad
@@ -1134,13 +1091,15 @@ add_lists:
    
         jmp .loop   
 
-        ; if carry != 0, add to buffer
+
+        .check_carry:        ; if carry != 0, add to buffer
         cmp byte [flag], 0
         je .no_carry
 
         .carry:
             add esi, 2      ; point to the next free position
-            mov byte [esi], 1
+            mov byte [esi], 49 ; = '1'
+            jmp .end
         
         .no_carry:
             inc esi
@@ -1244,13 +1203,6 @@ build_list:
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
     mov esi, [ebp + 8]          ; get buffer
-
-                    testing_no_num
-                    pushad
-                    push dword esi
-                    call print_buffer
-                    add esp, 4
-                    popad
 
     ; check for room in stack
     mov ecx, [stack_ptr]            ; base pointer
