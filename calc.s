@@ -3,18 +3,9 @@
 %define STACK_DEF_SIZE 5
 %define MAX_INPUT_SIZE 80
 %define NODE_LEN 5
+%define CELL_SIZE 4
 
-%macro cmp_and_set_str 4
-    mov esi, %1         ; argv[i] - source string
-    mov edi, %2         ; destination string
-    mov ecx, %3         ; number of bytes to compare
-    rep cmpsb
-    jne %%not_equal
-    %%equal:
-        mov %4, byte 1
-        jmp args_loop   ; jmp to beginig of the loop in case it was "-d"
-    %%not_equal:
-%endmacro
+
 %macro print_debug 1
     pushad                  ; save state
     push %1                 ; string to print
@@ -59,8 +50,9 @@
     mov byte bl, [ecx + data]
     push ebx                 ; string to print
     push format_number  
-    call printf
-    add esp, 8
+    push esi                 ; output file
+    call fprintf
+    add esp, 12
     mov dword ecx, [stdout]
     push ecx
     call fflush
@@ -79,32 +71,28 @@
     add esp, 4
     popad                   ; restore state
 %endmacro
-%macro testing_pointer 1
-    pushad      
-    mov dword ecx, %1
-    xor ebx, ebx            ; save state
-    mov byte bl, [ecx + data]
-    push ebx                 ; string to print
-    push format_pointer  
-    call printf
+
+%macro pop_print_debug 0
+    pushad
+    call pop_list
+    mov dword [prev_node_ptr], eax
+    popad
+    pushad
+    mov dword eax, [prev_node_ptr]
+    push dword [stderr]
+    push eax
+    call pop_print_rec              ; prints string to stderr
     add esp, 8
-    mov dword ecx, [stdout]
-    push ecx
-    call fflush
-    add esp, 4
-    popad                   ; restore state
-%endmacro
-%macro testing_no_num 0
-    pushad                  ; save state
-    push format_test              ; string to print
-    push format_string  
-    call printf
-    add esp, 8
-    mov dword ecx, [stdout]
-    push ecx
-    call fflush
-    add esp, 4
-    popad                   ; restore state
+    print_debug new_line
+    popad
+
+    pushad
+    mov dword ebx, [stack_curr_pos_ptr] ; ebx contains pointer to curr position in stack
+    mov dword eax, [prev_node_ptr]
+    mov dword [ebx], eax                ; change data in curr position of stack -> to curr link
+    add ebx, 4                          ; move to next cell
+    mov [stack_curr_pos_ptr], ebx       ; update curr free position
+    popad
 %endmacro
 
 section	.rodata			; we define (global) read-only variables in .rodata section
@@ -117,24 +105,17 @@ section	.rodata			; we define (global) read-only variables in .rodata section
     new_line:    db "", 10, 0
     zero_str:    db "0", 0
 
-	format_test: db "==== testing ==== ", 10, 0	; format string number
-	format_pointer: db "value is %d", 10, 0	; format string number
-
-
 section .data
-    ; size_i:                 ; Used to determine the size of the structure
     struc node
         data:  resb  1
         next: resb  4
     endstruc
-    ; node_len: equ $ - size_i     ; Size of the data type
 
 
 section .bss
     spt                 resd   1     ; stack pointer
     buffer              resb   MAX_INPUT_SIZE
     buffer_len          resb   MAX_INPUT_SIZE
-    aux_buffer          resb   MAX_INPUT_SIZE
     counter             resb   32    ; the total numebr of operations that were made
     debug               resb   1
     stack_size          resb   8     ; default is STACK_DEF_SIZE
@@ -143,6 +124,7 @@ section .bss
     var                 resb   4     ; aux variable to store registers before popad
     flag                resb   1     ; aux flag 
     prev_node_ptr       resb   4     ; previous node address for building list
+
 section .text
   align 16
   global main
@@ -208,7 +190,7 @@ main:
 
     .fin_args_loop:
         mov dword eax, [stack_size]     
-        mov ecx, 4
+        mov ecx, CELL_SIZE
         mul ecx                               
         push eax                              ; eax contains num of bytes to allocate
         call malloc                           ; stack allocation
@@ -219,7 +201,28 @@ main:
     call myCalc                 ; -> pushing return address as well
 
     end_main:   
-        print_num eax
+        ; change number (eax) to octal
+        mov dword ebx, buffer
+        .loop:
+            xor edx, edx
+            cmp eax, 0
+            je .done
+            mov esi, 8          ; divisor
+            div esi
+            add dl, '0'         ; change to char
+
+            mov byte [ebx], dl  
+            
+            inc ebx
+            jmp .loop
+        
+        .done:
+        mov byte [ebx], dl  
+        inc ebx
+        mov byte [ebx], 10  
+        inc ebx
+        mov byte [ebx], 0 
+        print_str buffer
         print_str new_line
         mov esp, ebp
         pop ebp
@@ -232,7 +235,7 @@ main:
             ; use macros to print prompt (calc: ) and to get input from user 
             print_str prompt
             get_input
-
+            
             mov byte bl, [buffer]           ; get first char of buffer
             cmp bl, '0'             
             jge .maybe_number 
@@ -242,6 +245,17 @@ main:
                 cmp bl, '7' 
                 jg operator                 ; it is not a number
                 ; it is defitily a number
+                cmp byte [debug], 1
+                jne .regular_mode
+
+                pushad
+                mov dword eax, buffer
+                push eax
+                call print_err              ; prints string to stderr
+                add esp, 4
+                popad
+
+                .regular_mode:
                 pushad
                 push buffer
                 call build_list 
@@ -267,9 +281,8 @@ main:
             je .and                     ; jump to and
             cmp byte bl, 'n'
             je .num_bytes                ; jump to number of bytes
-            cmp byte bl, '*'
-            je .mult                     ; jump to multiply
- 
+           
+
             .quit:
                 dec dword [counter]            ; decrease operations counter - not counting quit
                 call free_stack
@@ -333,7 +346,7 @@ main:
                 push ecx
                 push edx
                 ; allocate two buffers that will use to create the sum list
-                add esi, 2          ; for \n and null char
+                add esi, 3          ; for \n and null char
                 push esi            ; store esi
                 
                 push esi            ; argument for calloc
@@ -394,7 +407,18 @@ main:
 
                 .build:
                     popad              ; restore regs - including pointer to begining of esi(*)
+                    
+                    cmp byte [debug], 1
+                    jne .add_regular_mode
 
+                    pushad
+                    mov dword eax, esi
+                    push eax
+                    call print_err              ; prints string to stderr
+                    add esp, 4
+                    popad
+
+                    .add_regular_mode:
                     pushad
                     push esi
                     call build_list
@@ -407,6 +431,7 @@ main:
                 push error_num_of_args
                 call print_err
                 add esp, 4
+                jmp main_loop
 
             .end_add:
                 pushad
@@ -447,9 +472,10 @@ main:
                 mov byte [flag], 1     ; set flag before call
 
                 pushad
+                push dword [stdout]
                 push eax
                 call pop_print_rec
-                add esp, 4
+                add esp, 8
                 popad
                 print_str new_line    
 
@@ -465,11 +491,12 @@ main:
                 ;call pop and then loop over the list and each node call build node and then push to the list
                 call pop_list
                 cmp al, '-'
-                je .end               ; error was printed
-                mov ecx, eax          ; pointer to the curr list we are duplicating
+                je main_loop               ; error was printed - return to main_loop
+
+                mov ecx, eax               ; pointer to the curr list we are duplicating
                 mov dword ebx, [stack_curr_pos_ptr] ; ebx contains address of curr free location
                 mov dword [ebx], eax                ; return the popped list to stack
-                add ebx, 4                          ; move to next cell
+                add ebx, CELL_SIZE                          ; move to next cell
                 mov [stack_curr_pos_ptr], ebx       ; update curr free position
                 xor eax, eax
                 .loop:
@@ -489,8 +516,16 @@ main:
                 
                 .end:
                     mov dword ebx, [stack_curr_pos_ptr] ; ebx contains address of curr free location
-                    add ebx, 4                          ; move to next cell
+                    add ebx, CELL_SIZE                          ; move to next cell
                     mov [stack_curr_pos_ptr], ebx       ; update curr free position
+
+                    ; check debug mode
+                    cmp byte [debug], 1
+                    jne .pop_regular_mode
+
+                    pop_print_debug                     ; macro to pop, print to stderr and return to previous state
+
+                    .pop_regular_mode:
                     jmp main_loop
             
             
@@ -573,49 +608,10 @@ main:
                     add esp, 4
                     jmp main_loop
 
-                ; .reduce:                
-                ;     mov byte [flag], 0
-                ;     mov edx, [stack_curr_pos_ptr]
-                ;     sub edx, 4
-                ;     push dword [edx]
-                ;     call .reduce_rec
-                ;     add esp, 4
-                ;     jmp ._end
-
-                ;     .reduce_rec:
-                ;         push ebp            
-                ;         mov ebp, esp        
-                ;         mov ebx, [ebp + 8] 
-                ;         testing_no_num
-                ;         print_str new_line
-                ;         cmp dword [ebx + next], 0
-                ;         jne .recursive_call
-
-                ;     .con:
-                ;         cmp byte [ebx + data], 0
-                ;         jne ._done
-                ;         push ebx
-                ;         call free
-                ;         add esp, 4
-                ;         jmp .end_rec
-
-                ;     .recursive_call:
-                ;         push ecx                ; store curr link address
-                ;         push dword [ecx + next]
-                ;         call .reduce_rec
-                ;         add esp, 4              ; clean stack
-                ;         pop ecx                 ; restore the curr link
-                ;         cmp byte [flag], 1
-                ;         je .end_rec
-                ;         jmp .con 
-                    
-                ;     ._done:
-                ;         mov byte [flag], 1
-
-                ;     .end_rec:
-                ;         mov esp, ebp
-                ;         pop ebp
-                ;         ret
+                    .end_rec:
+                        mov esp, ebp
+                        pop ebp
+                        ret
 
                 ._end:
                     popad               ; popping the registers to restore the addresses of first links in lists
@@ -630,9 +626,16 @@ main:
 
                     ; increment curr_position
                     mov dword eax, [stack_curr_pos_ptr]
-                    add eax, 4                          
+                    add eax, CELL_SIZE                          
                     mov dword [stack_curr_pos_ptr], eax
 
+                    ; check debug mode
+                    cmp byte [debug], 1
+                    jne .and_regular_mode
+
+                    pop_print_debug                     ; macro to pop, print to stderr and return to previous state
+
+                    .and_regular_mode:
                     jmp main_loop
             
             .num_bytes:     ;n 
@@ -720,13 +723,17 @@ main:
                     
                     ; increment curr_position
                     mov dword eax, [stack_curr_pos_ptr]
-                    add eax, 4                          
+                    add eax, CELL_SIZE                          
                     mov dword [stack_curr_pos_ptr], eax
 
-                    jmp main_loop
+                    ; check debug mode
+                    cmp byte [debug], 1
+                    jne .nbytes_regular_mode
 
-            .mult:           ;*
-                jmp main_loop
+                    pop_print_debug                     ; macro to pop, print to stderr and return to previous state
+
+                    .nbytes_regular_mode:
+                    jmp main_loop
 
 
         .end_main_loop:
@@ -740,7 +747,6 @@ print_err:
     push ebp            ; backing up base pointer
     mov ebp, esp        ; set ebp to current activation frame
     mov ebx, [ebp + 8]  ; get argument which is a string
-
 
     print_debug ebx     ; debug prints to stderr, so we can use it
 
@@ -788,7 +794,7 @@ free_stack:
     cmp dword ecx, [stack_ptr]
     je .end_while                       ; just clear stack allocation, stack is empty
     .while:
-        sub ecx, 4                      ; first occupied cell
+        sub ecx, CELL_SIZE                      ; first occupied cell
         mov ebx, ecx
         sub dword ebx, [stack_ptr]        
         cmp dword ebx, 0                ; if ebx == 0, then curr_pos == stack_ptr
@@ -830,10 +836,7 @@ get_buff_size:  ; returns buffer size EXCLUDING \n
     
     xor eax, eax
     .loop:
-        ; check if it is max input size OR '\n'
-        cmp eax, MAX_INPUT_SIZE
-        je .end
-        cmp byte [ebx], 10
+        cmp byte [ebx], 10      ; check if it is '\n'
         je .end
         inc ebx
         inc eax
@@ -859,7 +862,7 @@ pop_list: ; returns '-' if there are no elements
     ; else, there are args in cell
     xor eax, eax                    ; nullify 
     mov eax, [stack_curr_pos_ptr]   ; eax = address of the current free cell
-    sub eax, 4                      ; eax = eax - cell_size, to get first occupied cell
+    sub eax, CELL_SIZE              ; eax = eax - cell_size, to get first occupied cell
     mov dword ebx, [eax]            ; ebx = address of node in first occupied cell
 
     mov dword [stack_curr_pos_ptr], eax     ; set curr free position to eax (the current first occupied cell)
@@ -883,6 +886,7 @@ pop_print_rec:
     push ebp                    ; backing up base pointer
     mov ebp, esp                ; set ebp to current activation frame
     mov ebx, [ebp + 8]          ; get argument which is first link address
+    mov esi, [ebp + 12]         ; output file (stdout OR stderr)
 
     cmp dword [ebx + next], 0   ; if curr->next == null
     je .base_case               ; go to base case -> print data
@@ -890,9 +894,12 @@ pop_print_rec:
     .call_again:
         mov dword ecx, [ebx + next]
         push ebx                    ; store the current link
+        push esi                    ; store the output file
+        push esi
         push ecx                    ; parameter to next call is curr->next
         call pop_print_rec          
-        add esp, 4                  ; clean stack
+        add esp, 8                  ; clean stack
+        pop esi                     ; restore output file
         pop ebx                     ; restore curr link
    
     .base_case:
@@ -1183,6 +1190,7 @@ add_links_data:
     add dl, '0'         ; change to char
 
     mov byte [ebx], dl  
+    
     inc ebx
     dec edi
     jmp .loop
@@ -1207,7 +1215,7 @@ build_list:
     ; check for room in stack
     mov ecx, [stack_ptr]            ; base pointer
     mov dword eax, [stack_size]     ; total size
-    mov dword ebx, 4                ; cell size 
+    mov dword ebx, CELL_SIZE        ; cell size 
     mul ebx                         ; eax = eax*ebx -> eax is num of bytes allocated for stack
     add ecx, eax                    ; ecx points to the end of the stack array
     sub ecx, [stack_curr_pos_ptr]   ; sub from ecx the current location    
@@ -1281,33 +1289,8 @@ build_list:
 
     .end_build_list:
         mov dword eax, [stack_curr_pos_ptr]
-        add eax, 4                          ; go to next cell
+        add eax, CELL_SIZE                          ; go to next cell
         mov dword [stack_curr_pos_ptr], eax
-
-    .end:
-        mov esp, ebp
-        pop ebp
-        ret
-
-
-print_buffer:
-    push ebp                    ; backing up base pointer
-    mov ebp, esp                ; set ebp to current activation frame
-    mov esi, [ebp + 8]          ; get buffer
-
-    xor ebx, ebx
-
-    xor edi, edi
-    .loop:
-        mov byte bl, [esi]
-        cmp bl, 10
-        je .end
-        sub bl, '0'
-        print_num ebx
-        print_str new_line
-        inc esi
-
-        jmp .loop
 
     .end:
         mov esp, ebp
