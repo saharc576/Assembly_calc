@@ -19,14 +19,17 @@
     add esp, 4
     popad                   ; restore state
 %endmacro
-%macro print_str 1
+%macro print_str 2
     pushad
-    push %1
+    mov dword esi, %2     ; file
+    push esi
+    push %1         ; string to print
     push format_string
-    call printf
-    add esp, 8      ; clean stack
-    mov dword ecx, [stdout]
-    push ecx
+    push esi
+    call fprintf
+    add esp, 12      ; clean stack
+    pop esi
+    push esi
     call fflush
     add esp, 4
     popad
@@ -44,7 +47,8 @@
     popad
 %endmacro
 %macro print_data 1
-    pushad      
+    pushad   
+    push esi
     mov dword ecx, %1
     xor ebx, ebx                
     mov byte bl, [ecx + data]
@@ -53,8 +57,8 @@
     push esi                 ; output file
     call fprintf
     add esp, 12
-    mov dword ecx, [stdout]
-    push ecx
+    pop esi
+    push esi
     call fflush
     add esp, 4
     popad                   ; restore state
@@ -85,7 +89,7 @@
     add esp, 8
     print_debug new_line
     popad
-
+    ; return to previous state
     pushad
     mov dword ebx, [stack_curr_pos_ptr] ; ebx contains pointer to curr position in stack
     mov dword eax, [prev_node_ptr]
@@ -116,6 +120,7 @@ section .bss
     spt                 resd   1     ; stack pointer
     buffer              resb   MAX_INPUT_SIZE
     buffer_len          resb   MAX_INPUT_SIZE
+    aux_buffer          resb   MAX_INPUT_SIZE
     counter             resb   32    ; the total numebr of operations that were made
     debug               resb   1
     stack_size          resb   8     ; default is STACK_DEF_SIZE
@@ -201,39 +206,62 @@ main:
     call myCalc                 ; -> pushing return address as well
 
     end_main:   
-        ; change number (eax) to octal
-        mov dword ebx, buffer
-        .loop:
-            xor edx, edx
-            cmp eax, 0
-            je .done
-            mov esi, 8          ; divisor
-            div esi
-            add dl, '0'         ; change to char
+        ; if number is 0, print it
+        cmp eax, 0
+        jne .not_zero
 
-            mov byte [ebx], dl  
-            
-            inc ebx
-            jmp .loop
-        
-        .done:
-        mov byte [ebx], dl  
+        print_num eax
+        jmp .end
+
+        ; else, change number (eax) to octal
+        .not_zero:
+        mov dword ebx, buffer
+        mov dword ecx, aux_buffer
+        mov byte [ebx], 0 
         inc ebx
         mov byte [ebx], 10  
         inc ebx
-        mov byte [ebx], 0 
-        print_str buffer
-        print_str new_line
-        mov esp, ebp
-        pop ebp
-        ret
+        .loop:
+            cmp eax, 0
+            je .done
+            xor edx, edx
+            mov esi, 8          ; divisor
+            div esi
+            add dl, '0'         ; change to char
+            mov byte [ebx], dl  
+            inc ebx
+            jmp .loop
+        .done:
+            mov byte [ebx], dl 
+            dec ebx 
+        
+        .reverse:
+            xor eax, eax
+            cmp byte [ebx], 10
+            je ._print
+
+            mov byte al, [ebx]  ; curr char
+            mov byte [ecx], al  ; put it in second buffer
+
+            inc ecx          
+            dec ebx
+            mov byte [ecx], 0  ; put null char, if not needed yet, it will be written over
+            jmp .reverse
+
+        ._print:
+            print_str aux_buffer, dword [stdout]
+        .end:
+            print_str new_line, dword [stdout] 
+            mov esp, ebp
+            pop ebp
+            ret
 
     myCalc:
         push ebp            ; backing up base pointer
         mov ebp, esp        ; set ebp to current activation frame
         main_loop:
             ; use macros to print prompt (calc: ) and to get input from user 
-            print_str prompt
+            print_str prompt, dword [stdout]
             get_input
             
             mov byte bl, [buffer]           ; get first char of buffer
@@ -477,7 +505,7 @@ main:
                 call pop_print_rec
                 add esp, 8
                 popad
-                print_str new_line    
+                print_str new_line, dword [stdout]    
 
                 ; delete list
                 push eax
@@ -521,11 +549,11 @@ main:
 
                     ; check debug mode
                     cmp byte [debug], 1
-                    jne .pop_regular_mode
+                    jne .dup_regular_mode
 
                     pop_print_debug                     ; macro to pop, print to stderr and return to previous state
 
-                    .pop_regular_mode:
+                    .dup_regular_mode:
                     jmp main_loop
             
             
@@ -908,7 +936,9 @@ pop_print_rec:
                                     
         cmp byte [flag], 0          ; else, check if this is NOT the first printing. 
         jne .skip                   ; if it is indeed not, skip
-        print_str zero_str          ; else, add leading zero
+        cmp byte [ebx + data], 0    ; check if data is 0
+        je .end
+        print_str zero_str, esi          ; else, add leading zero
 
         .skip:
             mov byte [flag], 0          ; lower flag
